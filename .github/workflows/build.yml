@@ -50,11 +50,11 @@ jobs:
           mkdir -p "$THEOS/vendor/mod/roothide/package"
           printf 'THEOS_PACKAGE_INSTALL_PREFIX = /rootfs/var/jb\n' > "$THEOS/vendor/mod/roothide/package.mk"
           printf 'ifneq ($(THEOS_PACKAGE_ARCH),iphoneos-arm64e)\nTHEOS_PACKAGE_ARCH := iphoneos-arm64e\nendif\n' > "$THEOS/vendor/mod/roothide/package/deb.mk"
-          ls -la "$THEOS/lib/iphone/" || echo "LIB_IPHONE_LIST_FAILED"
-          ls "$THEOS/lib/iphone/rootless/" 2>/dev/null | head -5 || echo "ROOTLESS_LIB_MISSING"
+          # 注意: 主仓库 $THEOS/lib/iphone/rootless 是空壳, 真正的库在
+          # $THEOS/vendor/lib/iphone/rootless (recursive clone 的子模块, run#20 日志证实)
+          ls "$THEOS/vendor/lib/iphone/rootless/" | head -5
           mkdir -p "$THEOS/lib/iphone/roothide"
-          cp -r "$THEOS/lib/iphone/rootless/." "$THEOS/lib/iphone/roothide/" || echo "CP_FAILED_CODE=$?"
-          ls "$THEOS/lib/iphone/roothide/" | head -8
+          cp -r "$THEOS/vendor/lib/iphone/rootless/." "$THEOS/lib/iphone/roothide/"
           test -f "$THEOS/lib/iphone/roothide/libroot_oldabi.a"
           echo SETUP_SCHEME_OK
 
