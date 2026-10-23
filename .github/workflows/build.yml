@@ -28,9 +28,9 @@ jobs:
 
       - name: Install iOS toolchain (Linux)
         run: |
-          curl -LO https://github.com/sbingner/llvm-project/releases/download/v10.0.0-1/linux-ios-arm64e-clang-toolchain.tar.gz
+          curl -LO https://github.com/sbingner/llvm-project/releases/download/v10.0.0-2/linux-ios-arm64e-clang-toolchain.tar.lzma
           mkdir -p $THEOS/toolchain/linux/iphone
-          tar -zxf linux-ios-arm64e-clang-toolchain.tar.gz -C $THEOS/toolchain/linux/iphone --strip-components=1
+          tar --lzma -xf linux-ios-arm64e-clang-toolchain.tar.lzma -C $THEOS/toolchain/linux/iphone --strip-components=1
           $THEOS/toolchain/linux/iphone/bin/clang --version | head -1
 
       - name: Vendor Lua 5.3.6
