@@ -1,4 +1,4 @@
-THEOS_PACKAGE_SCHEME = rootless
+THEOS_PACKAGE_SCHEME = roothide
 TARGET := iphone:latest:14.0
 ARCHS = arm64 arm64e
 

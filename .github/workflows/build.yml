@@ -6,7 +6,7 @@ on:
 
 env:
   THEOS: /home/runner/theos
-  THEOS_PACKAGE_SCHEME: rootless
+  THEOS_PACKAGE_SCHEME: roothide
 
 jobs:
   build:
@@ -37,6 +37,20 @@ jobs:
           test -x $THEOS/toolchain/linux/iphone/bin/clang
           $THEOS/toolchain/linux/iphone/bin/clang --version | head -1
           ls $THEOS/sdks
+
+      # Theos 官方无 roothide scheme 模块(vendor/mod 仅有 rootless, 其 deb.mk 强制
+      # THEOS_PACKAGE_ARCH := iphoneos-arm64, 不匹配 roothide 设备的 iphoneos-arm64e)。
+      # 自制 roothide 模块: 布局前缀 /rootfs/var/jb + Architecture iphoneos-arm64e。
+      # 结构仿 rootless 模块(package.mk 设前缀 + package/deb.mk 设 ARCH),
+      # _THEOS_SCHEME_STAGE 由 common.mk 自动推导, 无需 instance/rules.mk。
+      # 详见 docs/BUILD_PLAN.md F24-F27
+      - name: Setup roothide scheme module
+        run: |
+          mkdir -p $THEOS/vendor/mod/roothide/package
+          printf 'THEOS_PACKAGE_INSTALL_PREFIX = /rootfs/var/jb\n' > $THEOS/vendor/mod/roothide/package.mk
+          printf 'ifneq ($(THEOS_PACKAGE_ARCH),iphoneos-arm64e)\nTHEOS_PACKAGE_ARCH := iphoneos-arm64e\nendif\n' > $THEOS/vendor/mod/roothide/package/deb.mk
+          echo "--- package.mk ---" && cat $THEOS/vendor/mod/roothide/package.mk
+          echo "--- package/deb.mk ---" && cat $THEOS/vendor/mod/roothide/package/deb.mk
 
       # 注意: lua/lua 仓库所有源码都在根目录(没有 src/ 子目录, src/ 布局仅存在于官方 tarball)。
       # 必须删除: lua.c/luac.c/onelua.c(含 main(), 链接 dylib 会符号冲突)

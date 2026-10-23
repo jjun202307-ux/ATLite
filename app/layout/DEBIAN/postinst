@@ -1,0 +1,4 @@
+#!/bin/sh
+# roothide: 注册 ATLite App 图标(uicache)。失败不得阻塞安装。
+uicache -p /rootfs/var/jb/Applications/ATLite.app 2>/dev/null || uicache -a 2>/dev/null || true
+exit 0
