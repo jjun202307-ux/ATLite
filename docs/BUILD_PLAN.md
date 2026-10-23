@@ -257,3 +257,29 @@ for (NSArray *pt in hits) {
 ### 修订后检查清单（增量）
 
 - [ ] C15：ATLWebServer.m（含 sockaddr 等 C 结构）在 run#14 已编译通过，无需改动；确认剩余流程为：链接 app → ldid 签名 → dpkg-deb 打包，无其它已知风险
+
+---
+
+## 修订 6（run#15 结果 → 修订）
+
+### run#15 实际结果
+
+- ✅ **app 完整构建成功**：编译（4 个 .m，双架构）→ Linking → Merging → Signing 全部通过
+- ✅ tweak 双架构编译+链接成功
+- ❌ tweak **stage 阶段**：`Error: You are missing a filter property list. Make sure it's named "ATLiteTweak.plist" or "Filter.plist"`
+
+### 新增事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F21 | Theos tweak.mk 的 stage 规则要求 filter plist 文件名与 `TWEAK_NAME` 完全一致（或通用名 `Filter.plist`）；原文件名为 `ATLite.plist` 不匹配 `TWEAK_NAME = ATLiteTweak` | run#15 日志 |
+| F22 | L1ghtmann 工具链 arm64e 有 `incompatible arm64e ABI compiler` 警告（仅 ld warning，非错误，产物正常生成；app 已链接/签名成功） | run#15 日志 |
+
+### 修订方案（4.8）
+
+`git mv tweak/ATLite.plist tweak/ATLiteTweak.plist`（内容不变）。
+
+### 修订后检查清单（增量）
+
+- [ ] C16：plist 已改名且内容（Filter Bundles: com.apple.UIKit + com.apple.springboard, Mode: Any）不变
+- [ ] C17：预期剩余流程：stage（tweak+app 安装到 .theos/_/）→ dpkg-deb 打包 → artifact 上传；全部为 theos 标准步骤，无代码风险
