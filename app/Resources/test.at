@@ -1,0 +1,54 @@
+-- ATLite 功能自检脚本
+-- 用法：手机打开 ATLite App（确保导入服务器已启动）→ 上传本文件 → 运行
+-- 建议在主屏幕或【设置】App 里运行（findText 测试需要屏幕上有中文文字）
+-- 结果看两处：App 弹窗 + tweak 日志（<jbroot>/var/mobile/Library/ATLite/logs/tweak.log）
+
+log("=== ATLite 自检开始 ===")
+
+-- 1. 基础：屏幕尺寸与路径
+local w, h = screenWidth(), screenHeight()
+log("屏幕: " .. w .. " x " .. h)
+log("脚本目录: " .. rootDir())
+
+-- 2. 取色（屏幕中心）
+local c = getColor(math.floor(w / 2), math.floor(h / 2))
+if c then
+    log("[PASS] getColor -> 0x" .. string.format("%06X", c))
+else
+    log("[FAIL] getColor 返回 nil —— 抓屏不可用，请查 tweak.log 里 'capture ready'")
+end
+
+-- 3. 触摸模拟：点屏幕顶部空白处两次（验证 IOHIDEvent 链路）
+tap(30, 30)
+usleep(300000)  -- 300ms
+tap(30, 60)
+log("[DONE] tap 已发送两次 —— 请肉眼确认屏幕左上角有反应（如状态栏下拉）")
+
+-- 4. 搜字（Vision OCR）：主屏幕/设置里通常有"设置"二字
+local r = findText("设置")
+if r and #r > 0 then
+    log("[PASS] findText('设置') -> " .. r[1][1] .. ", " .. r[1][2])
+else
+    log("[SKIP] findText 未命中 —— 当前页面没有'设置'二字属正常，换有中文的页面再试")
+end
+
+-- 5. 搜图：需要先在网页管理页上传 test_template.png（从当前屏幕截图裁一块）
+local img = findImage("test_template.png", 0.8)
+if img and #img > 0 then
+    log("[PASS] findImage -> 位置 " .. img[1][1] .. ", " .. img[1][2] .. " 相似度 " .. string.format("%.3f", img[1][3]))
+else
+    log("[SKIP] findImage 未上传模板或未匹配 —— 先上传 test_template.png 再测")
+end
+
+-- 6. 搜色：取刚才中心点的颜色，再反向搜它（自洽性测试，必命中）
+if c then
+    local same = findColor(c, 10)
+    if same and #same > 0 then
+        log("[PASS] findColor 回搜命中 " .. #same .. " 处")
+    else
+        log("[WARN] findColor 回搜未命中（屏幕在变化属正常）")
+    end
+end
+
+usleep(500000)
+log("=== 自检结束 ===")

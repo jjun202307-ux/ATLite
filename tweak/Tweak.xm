@@ -1,11 +1,16 @@
-// ATLiteTweak - AutoTouch-style script runner (rootless, roothide/Dopamine)
+// ATLiteTweak v0.2.0 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
-// 架构对齐 AutoTouch 8.6.3（见逆向分析报告）:
+// 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
+//  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
+//    全部经过真机提取头文件 / WebKit SPI / KIF / SimulateTouch / AutoTouch 反汇编取证，
+//    禁止凭记忆新增任何私有 API 调用。
+//  - R17：Extensions.lua 带版本标记，版本感知覆写。
+//
+// 架构（对齐 AutoTouch 8.6.3，见 at_analysis/AutoTouch分析报告.md）：
 //  - Lua 5.3 引擎住在 tweak 内（SpringBoard 进程），App 只是管理器
-//  - 脚本为 .at 文件（Lua 语法），存放在 <jbroot>/var/mobile/Library/ATLite/Scripts/
-//  - LuaLibraries/Extensions.lua 预加载（AutoTouch 同机制），提供 API 糖
-//  - App 通过 command.json + Darwin 通知指挥 tweak（AutoTouch 同构的进程通信）
-//  - 触摸模拟走 IOHIDEventSystemClient（SimulateTouch/zxtouch/AutoTouch 同原理）
+//  - 脚本 .at（Lua 语法），存 <jbroot>/var/mobile/Library/ATLite/Scripts/
+//  - App 经 command.json + Darwin 通知指挥 tweak（AutoTouch 同构）
+//  - 触摸/按键 = IOHIDEvent 合成；抓屏 = CARenderServer；搜字 = Vision OCR
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -18,6 +23,7 @@
 #import <sys/stat.h>
 #import <time.h>
 #import <math.h>
+#import <stdlib.h>
 
 extern "C" {
 #include <lua.h>
@@ -25,8 +31,11 @@ extern "C" {
 #include <lauxlib.h>
 }
 
-// theos SDK 的 Vision 头不含 VNRecognizedText.h(仅 @class 前置声明)。
-// 以下 API 运行时 iOS 13+ 存在(部署目标 14.0),仅补编译期声明。
+// ============================================================================
+// R14：theos SDK 的 Vision 头缺 VNRecognizedText.h（仅 @class 前置声明）。
+// 以下成员 iOS 13+ 运行时存在（部署目标 14.0），仅补编译期声明。
+// 来源：Apple 文档 + KIF 实际调用。
+// ============================================================================
 @interface VNRecognizedText (ATLiteSDKCompat)
 - (NSArray<VNRecognizedText *> *)topCandidates:(NSUInteger)maxCandidateCount;
 @property (nonatomic, readonly) CGRect boundingBox;
@@ -61,7 +70,6 @@ static NSString *ATLibsDir(void)    { return [ATBaseDir() stringByAppendingPathC
 static NSString *ATLogsDir(void)    { return [ATBaseDir() stringByAppendingPathComponent:@"logs"]; }
 static NSString *ATImagesDir(void)  { return [ATBaseDir() stringByAppendingPathComponent:@"Images"]; }
 
-// 与 AutoTouch 一致: print = log
 #pragma mark - Logging
 
 static void ATLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1,2);
@@ -83,36 +91,43 @@ static void ATLog(NSString *fmt, ...) {
     } @catch (__unused id e) {}
 }
 
-#pragma mark - Touch/key simulation (IOHIDEvent, private)
+#pragma mark - Touch/key simulation (IOHIDEvent)
 
-// 枚举值取自 IOKit 私有头 IOHIDEventTypes.h（SimulateTouch/zxtouch 等开源实现通用定义）
+// ---- 常量（R2：四方来源一致，写出推导算式）----
+// 来源：WebKit IOKitSPIIOS.h、KIF IOHIDEvent+KIF.m、rpc-project consts.py、IDAObjcTypes Types.h
+// base = kIOHIDEventTypeDigitizer(11) << 16 = 0x000B0000
+//   MajorRadius          = base + 20 = 0x000B0014
+//   MinorRadius          = base + 21 = 0x000B0015
+//   IsDisplayIntegrated  = MajorRadius + 5 = base + 25 = 0x000B0019
+//   ⚠ 0x000B000B 是 BarrelPressure（base+11），E2 的教训
 enum {
     kIOHIDDigitizerEventRange    = 0x00000001,
     kIOHIDDigitizerEventTouch    = 0x00000002,
     kIOHIDDigitizerEventPosition = 0x00000004,
 };
 enum { kIOHIDDigitizerTransducerTypeHand = 3 };
-// 字段值经 WebKit IOKitSPIIOS.h / KIF / rpc-project consts.py / IDAObjcTypes 四方一致推导：
-// base = kIOHIDEventTypeDigitizer(11) << 16 = 0x000B0000
-// MajorRadius = base+20，IsDisplayIntegrated = MajorRadius+5 = base+25
-// 注意：0x000B000B 是 BarrelPressure(base+11)，不是 IsDisplayIntegrated
-#define kIOHIDEventFieldDigitizerMajorRadius        0x000B0014
-#define kIOHIDEventFieldDigitizerMinorRadius        0x000B0015
-#define kIOHIDEventFieldDigitizerIsDisplayIntegrated 0x000B0019
 
+#define AT_FIELD_MAJOR_RADIUS         0x000B0014
+#define AT_FIELD_MINOR_RADIUS         0x000B0015
+#define AT_FIELD_IS_DISPLAY_INTEGRATED 0x000B0019
+
+// ---- 符号与签名（R1/R5：逐参数对照 nanotech/iphoneheaders IOHIDEvent.h）----
 typedef struct CF_BRIDGED_TYPE(id) __IOHIDEvent *IOHIDEventRef;
 typedef struct CF_BRIDGED_TYPE(id) __IOHIDEventSystemClient *IOHIDEventSystemClientRef;
 
 static IOHIDEventSystemClientRef (*_AT_IOHIDEventSystemClientCreate)(CFAllocatorRef);
 static void (*_AT_IOHIDEventSystemClientDispatchEvent)(IOHIDEventSystemClientRef, IOHIDEventRef);
+// DigitizerEvent(15 参): allocator, ts, transducerType, index, identity, eventMask, options,
+//                        x, y, z, tipPressure, barrelPressure, range, touch, options
 static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
-// 真实签名（nanotech/iphoneheaders IOHIDEvent.h）：allocator, timeStamp, index, identity,
-// eventMask, x, y, z, tipPressure, twist, range, touch, options = 13 参（勿多加 uint32）
+// FingerEvent（13 参，E5 的教训——多一个 uint32 都会错位寄存器）:
+//   allocator, ts, index, identity, eventMask, x, y, z, tipPressure, twist, range, touch, options
 static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
 static void (*_AT_IOHIDEventAppendEvent)(IOHIDEventRef, IOHIDEventRef, uint32_t);
-// 注意：真实符号名是 ...Value 结尾（IOHIDEventSetInteger 这个符号不存在，dlsym 会返回 NULL）
+// ⚠ E1：真实符号名以 ...Value 结尾；"IOHIDEventSetInteger" 不存在
 static void (*_AT_IOHIDEventSetIntegerValue)(IOHIDEventRef, uint32_t, int32_t);
 static void (*_AT_IOHIDEventSetFloatValue)(IOHIDEventRef, uint32_t, Float32);
+// 键盘：usagePage/usage 真实类型 uint16_t（F48）
 static IOHIDEventRef (*_AT_IOHIDEventCreateKeyboardEvent)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
 
 static IOHIDEventSystemClientRef gHIDClient = nil;
@@ -145,16 +160,15 @@ static void ATLoadHIDSymbols(void) {
           _AT_IOHIDEventCreateKeyboardEvent ? @"YES" : @"NO");
 }
 
-// —— 拟人化三件套：坐标抖动 / 随机时间戳 / 随机接触面积 ——
-// 依据 BUILD_PLAN F40-F43：真人手指落点有 ±2pt 噪声、事件时间戳有 ±1ms 自然抖动、
-// 指尖接触椭圆 3.5~6mm（Apple 默认 5mm，单位 mm）
+// ---- 拟人化三件套（用户需求：坐标抖动/随机时间戳/随机接触面积）----
+// 依据：真人落点 ±2pt 噪声、事件时间戳 ±1ms 抖动、指尖椭圆 3.5~6mm（Apple 默认 5mm，单位 mm）
 
-// 返回 [-amount, +amount) 的均匀抖动
+// [-amount, +amount) 均匀抖动
 static float ATJitter(float amount) {
     return ((float)arc4random_uniform(2000) / 1999.0f * 2.0f - 1.0f) * amount;
 }
 
-// mach_absolute_time() ± 1ms（按 mach_timebase 正确换算为 ticks）
+// mach_absolute_time() ± 1ms（mach_timebase 正确换算 ticks）
 static uint64_t ATTimestampNow(void) {
     static mach_timebase_info_data_t tb = {0, 0};
     if (tb.denom == 0) mach_timebase_info(&tb);
@@ -164,7 +178,10 @@ static uint64_t ATTimestampNow(void) {
     return mach_absolute_time() + (int64_t)arc4random_uniform((uint32_t)(half * 2)) - (int64_t)half;
 }
 
-// action: 0=down 1=move 2=up （与 AutoTouch touchDown/touchMove/touchUp 对应）
+// action: 0=down 1=move 2=up
+// 事件装配（R4）：与 SimulateTouch/KIF 逐参数一致（F42/F43）——
+//   hand（父）：index=0 identity=0 x/y/z=0 压力=0 mask=Touch range=0 touch=true
+//   finger（子）：index 从 1 起（finger+1）、identity=2、mask 动态、tipPressure=0
 static void ATSimulateTouch(int action, int finger, float x, float y) {
     if (!gHIDReady) return;
     uint64_t ts = ATTimestampNow();
@@ -174,64 +191,60 @@ static void ATSimulateTouch(int action, int finger, float x, float y) {
         : (kIOHIDDigitizerEventRange   | kIOHIDDigitizerEventTouch);
     Boolean touching = isUp ? 0 : 1;
 
-    // 1) 坐标抖动：down/up ±2pt、move ±1pt（真人无法精准复点同一像素；
-    //    down 与 up 各自独立抖动，天然形成按住期间的微漂移）
+    // 拟人化 1：坐标抖动（down/up ±2pt、move ±1pt）
     float j = (action == 1) ? 1.0f : 2.0f;
     x += ATJitter(j);
     y += ATJitter(j);
 
-    // 3) 随机接触面积：major 3.5~6.0mm、minor 2.5~4.5mm（minor ≤ major）
+    // 拟人化 3：随机接触面积（major 3.5~6.0mm、minor 2.5~4.5mm，minor ≤ major）
     float major = 3.5f + (float)arc4random_uniform(251) / 100.0f;
     float minor = 2.5f + (float)arc4random_uniform(201) / 100.0f;
     if (minor > major) minor = major;
 
-    // hand（父事件）：与 SimulateTouch/KIF 参考实现一致——位置/压力为 0，
-    // 由 finger 子事件携带坐标与触摸状态（F42）
     IOHIDEventRef hand = _AT_IOHIDEventCreateDigitizerEvent(
         kCFAllocatorDefault, ts, kIOHIDDigitizerTransducerTypeHand,
         0, 0, kIOHIDDigitizerEventTouch, 0,
         0, 0, 0, 0, 0, 0, true, 0);
-    // finger（子事件）：index 从 1 起、identity=2（IOHIDFamily：multitouch 视 2 为 finger）（F43）
     IOHIDEventRef fg = _AT_IOHIDEventCreateDigitizerFingerEvent(
         kCFAllocatorDefault, ts,
         (uint32_t)(finger + 1), 2, mask,
         x, y, 0, 0, 0, touching, touching, 0);
     if (!hand || !fg) { if (hand) CFRelease(hand); if (fg) CFRelease(fg); return; }
     _AT_IOHIDEventAppendEvent(hand, fg, 0);
-    _AT_IOHIDEventSetIntegerValue(hand, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
-    _AT_IOHIDEventSetIntegerValue(fg,   kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
-    _AT_IOHIDEventSetFloatValue(fg, kIOHIDEventFieldDigitizerMajorRadius, major);
-    _AT_IOHIDEventSetFloatValue(fg, kIOHIDEventFieldDigitizerMinorRadius, minor);
+    _AT_IOHIDEventSetIntegerValue(hand, AT_FIELD_IS_DISPLAY_INTEGRATED, 1);
+    _AT_IOHIDEventSetIntegerValue(fg,   AT_FIELD_IS_DISPLAY_INTEGRATED, 1);
+    _AT_IOHIDEventSetFloatValue(fg, AT_FIELD_MAJOR_RADIUS, major);
+    _AT_IOHIDEventSetFloatValue(fg, AT_FIELD_MINOR_RADIUS, minor);
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, hand);
     CFRelease(hand);
     CFRelease(fg);
 }
 
-// keyDown/keyUp: usage 为 consumer page (0x0C) 的用法码，与 AutoTouch KEY_TYPE 值一致
+// keyDown/keyUp: consumer page (0x0C) 用法码，与 AutoTouch KEY_TYPE 一致
 #define AT_HID_USAGE_PAGE_CONSUMER 0x0C
 static void ATSimulateKey(BOOL down, int usage) {
     if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent) return;
     IOHIDEventRef ev = _AT_IOHIDEventCreateKeyboardEvent(
         kCFAllocatorDefault, ATTimestampNow(),
-        AT_HID_USAGE_PAGE_CONSUMER, (uint32_t)usage, down ? TRUE : FALSE, 0);
+        AT_HID_USAGE_PAGE_CONSUMER, (uint16_t)usage, down ? TRUE : FALSE, 0);
     if (!ev) return;
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, ev);
     CFRelease(ev);
 }
 
-#pragma mark - Screen capture (CARenderServer + IOSurface, 全部 dlsym 绕开 SDK 头文件)
+#pragma mark - Screen capture (CARenderServer + IOSurface)
 
 typedef struct CF_BRIDGED_TYPE(id) __IOSurface *IOSurfaceRef;
-// 真实签名（AutoTouch libATGraphic 反汇编 + ios-mcp 实证，BUILD_PLAN F46/F47）：
-// IOSurfaceRef CARenderServerCaptureDisplay(uint32_t serverPort=0, CFStringRef displayName, CFDictionaryRef options)
-// —— 首参 0 = 默认 server（不是 server 指针！），第二参显示屏名（iOS: "LCD"，备选 "Main"）
+// R3：真实签名（AutoTouch libATGraphic 反汇编 + ios-mcp 实证，F46/F47）：
+//   IOSurfaceRef CARenderServerCaptureDisplay(uint32_t serverPort=0, CFStringRef displayName, CFDictionaryRef options)
+//   首参 0 = 默认 server（不是指针！），第二参显示屏名 iOS="LCD"（备选 "Main"）
 static IOSurfaceRef (*_AT_CARenderServerCaptureDisplay)(uint32_t, CFStringRef, CFDictionaryRef);
 static size_t (*_AT_IOSurfaceGetWidth)(IOSurfaceRef);
 static size_t (*_AT_IOSurfaceGetHeight)(IOSurfaceRef);
 static size_t (*_AT_IOSurfaceGetBytesPerRow)(IOSurfaceRef);
 static uint32_t (*_AT_IOSurfaceGetPixelFormat)(IOSurfaceRef);
 static void * (*_AT_IOSurfaceGetBaseAddress)(IOSurfaceRef);
-// 可选：读前加锁（经典截图模式，AutoTouch 同样 Lock/Unlock）；缺失时不阻塞
+// 可选（缺失不阻塞）：读前 Lock/Unlock（AutoTouch 同模式）
 static int32_t (*_AT_IOSurfaceLock)(IOSurfaceRef, uint32_t, uint32_t *);
 static void (*_AT_IOSurfaceUnlock)(IOSurfaceRef, uint32_t, uint32_t);
 static BOOL gCaptureReady = NO;
@@ -239,8 +252,14 @@ static BOOL gCaptureReady = NO;
 static void ATLoadCaptureSymbols(void) {
     void *qc = dlopen("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", RTLD_NOW);
     void *ios = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_NOW);
-    if (!qc || !ios) { ATLog(@"QuartzCore/IOSurface dlopen failed: %s / %s",
-                             qc ? "ok" : dlerror(), ios ? "ok" : dlerror()); return; }
+    if (!qc || !ios) {
+        // m1：dlerror 每调用一次清空一次，显式取一次存变量，避免诊断信息被吞
+        char *eqc = qc ? NULL : dlerror();
+        char *eios = ios ? NULL : dlerror();
+        ATLog(@"QuartzCore/IOSurface dlopen failed: %s / %s",
+              qc ? "ok" : (eqc ?: "?"), ios ? "ok" : (eios ?: "?"));
+        return;
+    }
     _AT_CARenderServerCaptureDisplay = (typeof(_AT_CARenderServerCaptureDisplay))dlsym(qc, "CARenderServerCaptureDisplay");
     _AT_IOSurfaceGetWidth            = (typeof(_AT_IOSurfaceGetWidth))dlsym(ios, "IOSurfaceGetWidth");
     _AT_IOSurfaceGetHeight           = (typeof(_AT_IOSurfaceGetHeight))dlsym(ios, "IOSurfaceGetHeight");
@@ -266,15 +285,14 @@ static void ATFreeBitmap(ATBitmap *b) {
     b->w = b->h = 0;
 }
 
-// 抓当前主屏，输出 RGBA8（仅 SpringBoard 进程可用）
+// 抓主屏 → RGBA8（仅 SpringBoard 进程可用）
 static BOOL ATCaptureScreen(ATBitmap *out) {
     if (!gCaptureReady) return NO;
-    // port=0（默认 server）+ 显示屏名：iOS 上 "LCD" 优先，"Main" 回退（ios-mcp 同款策略）
     IOSurfaceRef s = _AT_CARenderServerCaptureDisplay(0, CFSTR("LCD"), NULL);
     if (!s) s = _AT_CARenderServerCaptureDisplay(0, CFSTR("Main"), NULL);
     if (!s) return NO;
     uint32_t seed = 0;
-    if (_AT_IOSurfaceLock) _AT_IOSurfaceLock(s, 1 /*kIOSurfaceLockReadOnly*/, &seed);  // 读前加锁
+    if (_AT_IOSurfaceLock) _AT_IOSurfaceLock(s, 1 /*kIOSurfaceLockReadOnly*/, &seed);
     int w = (int)_AT_IOSurfaceGetWidth(s);
     int h = (int)_AT_IOSurfaceGetHeight(s);
     size_t pitch = _AT_IOSurfaceGetBytesPerRow(s);
@@ -290,19 +308,23 @@ static BOOL ATCaptureScreen(ATBitmap *out) {
         if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);
         CFRelease(s); return NO;
     }
-    int rIdx = (fmt == 'ARGB') ? 1 : 2;  // 输出统一 RGBA
-    int bIdx = (fmt == 'ARGB') ? 3 : 0;
+    // 像素格式→RGBA 通道索引（M1：ARGB 的 G 在 2 号位，BGRA 的 G 在 1 号位；
+    // 多字符字面量属实现定义行为，用显式数值：'ARGB'=0x41524742，'BGRA'=0x42475241）
+    const uint32_t AT_FMT_ARGB = 0x41524742u;
+    int rIdx, gIdx, bIdx;
+    if (fmt == AT_FMT_ARGB) { rIdx = 1; gIdx = 2; bIdx = 3; }
+    else                    { rIdx = 2; gIdx = 1; bIdx = 0; }  // 'BGRA'（iOS 抓屏常态）
     for (int y = 0; y < h; y++) {
         uint8_t *src = base + (size_t)y * pitch;
         uint8_t *dst = out->rgba + (size_t)y * w * 4;
         for (int x = 0; x < w; x++) {
             dst[x*4+0] = src[x*4+rIdx];
-            dst[x*4+1] = src[x*4+1];
+            dst[x*4+1] = src[x*4+gIdx];
             dst[x*4+2] = src[x*4+bIdx];
             dst[x*4+3] = src[x*4+3];
         }
     }
-    if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);  // 读毕解锁
+    if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);
     CFRelease(s);
     return YES;
 }
@@ -311,7 +333,7 @@ static inline uint8_t ATLuma(const uint8_t *px) {
     return (uint8_t)((px[0] * 299 + px[1] * 587 + px[2] * 114) / 1000);
 }
 
-#pragma mark - Image matching (粗到细 NCC 模板匹配)
+#pragma mark - Image matching (粗到细 NCC)
 
 typedef struct { uint8_t *g; int w, h; } ATGray;
 
@@ -329,25 +351,21 @@ static BOOL ATRGBAToGray(const ATBitmap *src, ATGray *dst) {
     return YES;
 }
 
-// scale: 缩小倍数（nearest 采样）
 static BOOL ATGrayDownscale(const ATGray *src, ATGray *dst, int scale) {
     dst->w = src->w / scale; dst->h = src->h / scale;
     if (dst->w <= 0 || dst->h <= 0) return NO;
     dst->g = (uint8_t *)malloc((size_t)dst->w * dst->h);
     if (!dst->g) return NO;
-    for (int y = 0; y < dst->h; y++) {
-        for (int x = 0; x < dst->w; x++) {
+    for (int y = 0; y < dst->h; y++)
+        for (int x = 0; x < dst->w; x++)
             dst->g[(size_t)y * dst->w + x] = src->g[(size_t)(y * scale) * src->w + x * scale];
-        }
-    }
     return YES;
 }
 
-// 在 gray 里做零均值 NCC，返回最佳位置与得分；scale 用于映射回原图坐标
+// 零均值 NCC，返回最佳位置与得分
 static BOOL ATNCCBest(const ATGray *hay, const ATGray *needle, double minScore,
                       int *outX, int *outY, double *outScore) {
     if (needle->w < 4 || needle->h < 4 || hay->w < needle->w || hay->h < needle->h) return NO;
-    // 模板均值与方差
     double tMean = 0;
     for (int i = 0; i < needle->w * needle->h; i++) tMean += needle->g[i];
     tMean /= needle->w * needle->h;
@@ -356,7 +374,7 @@ static BOOL ATNCCBest(const ATGray *hay, const ATGray *needle, double minScore,
         double d = needle->g[i] - tMean;
         tVar += d * d;
     }
-    if (tVar < 1e-6) return NO; // 纯色模板无意义
+    if (tVar < 1e-6) return NO;
 
     double best = -1;
     int bx = -1, by = -1;
@@ -389,37 +407,35 @@ static BOOL ATNCCBest(const ATGray *hay, const ATGray *needle, double minScore,
     return YES;
 }
 
-// 完整搜图: 抓屏 → 粗搜(1/4) → 原图精搜
+// 完整搜图: 粗搜(1/4) → 粗命中附近 ±pad 原图精搜
 static BOOL ATFindImageInScreen(const ATGray *screenFull, const ATBitmap *tmplRGBA,
                                 double similarity, int *outX, int *outY, double *outScore) {
     ATGray tmplGray = {0};
     if (!ATRGBAToGray(tmplRGBA, &tmplGray)) return NO;
 
     ATGray screenQuarter = {0}, tmplQuarter = {0};
-    BOOL found = NO;
     int cx = 0, cy = 0;
     double score = 0;
+    BOOL found = NO;
     if (ATGrayDownscale(screenFull, &screenQuarter, 4) && ATGrayDownscale(&tmplGray, &tmplQuarter, 4)) {
-        if (ATNCCBest(&screenQuarter, &tmplQuarter, similarity - 0.15, &cx, &cy, &score)) {
-            found = YES;
-        }
+        found = ATNCCBest(&screenQuarter, &tmplQuarter, similarity - 0.15, &cx, &cy, &score);
     }
     ATFreeGray(&screenQuarter);
     ATFreeGray(&tmplQuarter);
     if (!found) { ATFreeGray(&tmplGray); return NO; }
 
-    // 精搜：在粗命中附近 ±12px（原图坐标）全分辨率搜索
-    int pad = 12;
-    int x0 = MAX(0, cx * 4 - pad), y0 = MAX(0, cy * 4 - pad);
-    int x1 = MIN(screenFull->w, x0 + tmplQuarter.w * 4 + tmplGray.w - tmplGray.w + pad * 2 + tmplGray.w);
-    int y1 = MIN(screenFull->h, y0 + tmplQuarter.h * 4 + tmplGray.h + pad * 2);
-    x1 = MIN(screenFull->w, cx * 4 + tmplGray.w + pad * 2 + 8);
-    y1 = MIN(screenFull->h, cy * 4 + tmplGray.h + pad * 2 + 8);
+    // 精搜窗口：粗命中(原图坐标)扩 pad，保证完整容纳模板
+    const int pad = 12;
+    int x0 = MAX(0, cx * 4 - pad);
+    int y0 = MAX(0, cy * 4 - pad);
+    int x1 = MIN(screenFull->w, cx * 4 + tmplGray.w + pad * 2 + 8);
+    int y1 = MIN(screenFull->h, cy * 4 + tmplGray.h + pad * 2 + 8);
     if (x1 - x0 < tmplGray.w || y1 - y0 < tmplGray.h) { ATFreeGray(&tmplGray); return NO; }
 
     ATGray region = {0};
     region.w = x1 - x0; region.h = y1 - y0;
     region.g = (uint8_t *)malloc((size_t)region.w * region.h);
+    if (!region.g) { ATFreeGray(&tmplGray); return NO; }
     for (int y = 0; y < region.h; y++)
         memcpy(region.g + (size_t)y * region.w,
                screenFull->g + (size_t)(y0 + y) * screenFull->w + x0, region.w);
@@ -433,10 +449,11 @@ static BOOL ATFindImageInScreen(const ATGray *screenFull, const ATBitmap *tmplRG
     return ok;
 }
 
-// 加载模板 PNG/JPG → RGBA
+// 模板 PNG/JPG → RGBA（路径白名单校验，防目录穿越）
 static BOOL ATLoadTemplate(const char *nameUtf8, ATBitmap *out) {
     NSString *name = [NSString stringWithUTF8String:nameUtf8];
-    if (name.length > 128 || [name containsString:@"/"] || [name containsString:@".."]) return NO;
+    if (name.length == 0 || name.length > 128) return NO;
+    if ([name containsString:@"/"] || [name containsString:@"\\"] || [name containsString:@".."]) return NO;
     NSString *ext = name.pathExtension.lowercaseString;
     if (![ext isEqualToString:@"png"] && ![ext isEqualToString:@"jpg"] &&
         ![ext isEqualToString:@"jpeg"]) return NO;
@@ -447,23 +464,26 @@ static BOOL ATLoadTemplate(const char *nameUtf8, ATBitmap *out) {
     if (!img) return NO;
     CGImageRef cg = img.CGImage;
     int w = (int)CGImageGetWidth(cg), h = (int)CGImageGetHeight(cg);
-    if (w <= 0 || h <= 0 || (long)w * h > 4e6) return NO; // 模板限制在 4MP 内
+    if (w <= 0 || h <= 0 || (long)w * h > 4000000) return NO;
     out->w = w; out->h = h;
     out->rgba = (uint8_t *)malloc((size_t)w * h * 4);
+    if (!out->rgba) return NO;
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     CGContextRef ctx = CGBitmapContextCreate(out->rgba, w, h, 8, w * 4, cs,
         kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    if (!ctx) { CGColorSpaceRelease(cs); free(out->rgba); out->rgba = NULL; return NO; }
     CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), cg);
     CGContextRelease(ctx);
     CGColorSpaceRelease(cs);
     return YES;
 }
 
-// CGImage ← RGBA（供 Vision OCR 用）
+// CGImage ← RGBA（Vision OCR 用）
 static CGImageRef ATCreateCGImageFromBitmap(const ATBitmap *b) {
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     CGContextRef ctx = CGBitmapContextCreate(b->rgba, b->w, b->h, 8, b->w * 4, cs,
         kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    if (!ctx) { CGColorSpaceRelease(cs); return NULL; }
     CGImageRef img = CGBitmapContextCreateImage(ctx);
     CGContextRelease(ctx);
     CGColorSpaceRelease(cs);
@@ -505,10 +525,8 @@ static int l_usleep(lua_State *L) {
     nanosleep(&req, NULL);
     return 0;
 }
-// ATLite 扩展: msleep(毫秒) —— AutoTouch 没有但写脚本更顺手
+// ATLite 扩展: msleep(毫秒)
 static int l_msleep(lua_State *L) {
-    lua_pushcfunction(L, NULL); // placeholder to keep stack balanced if misused
-    lua_pop(L, 1);
     double ms = luaL_checknumber(L,1);
     struct timespec req;
     req.tv_sec = (time_t)(ms / 1000);
@@ -532,12 +550,10 @@ static int l_rootDir(lua_State *L) {
     lua_pushstring(L, ATScriptsDir().fileSystemRepresentation);
     return 1;
 }
-// stop(): 终止脚本（AutoTouch 同名 API）
+// stop(): 终止脚本（AutoTouch 同名 API），以特定错误消息实现
 static int l_stop(lua_State *L) {
     return luaL_error(L, "STOP");
 }
-
-// ---- 屏幕取色/搜图/搜字 ----
 
 static int l_getColor(lua_State *L) {
     int x = (int)luaL_checkinteger(L, 1);
@@ -551,15 +567,13 @@ static int l_getColor(lua_State *L) {
     return 1;
 }
 
-// findColor(color) / findColor(color, tolerance) → { {x,y}, ... }
+// findColor(color[, tolerance]) → { {x,y}, ... }（1/4 缩放扫描，最多 10 个）
 static int l_findColor(lua_State *L) {
     unsigned int color = (unsigned int)luaL_checkinteger(L, 1);
     int tol = lua_isnumber(L, 2) ? (int)lua_tointeger(L, 2) : 16;
     uint8_t cr = (color >> 16) & 0xFF, cg = (color >> 8) & 0xFF, cb = color & 0xFF;
     ATBitmap b = {0};
     if (!ATCaptureScreen(&b)) { lua_pushnil(L); return 1; }
-
-    // 1/4 缩放扫描
     int scale = 4, sw = b.w / scale, sh = b.h / scale;
     lua_newtable(L);
     int n = 0;
@@ -579,7 +593,7 @@ static int l_findColor(lua_State *L) {
     return 1;
 }
 
-// findImage("button.png", 0.9) → { {x, y, score}, ... }（中心点坐标）
+// findImage("button.png"[, similarity]) → { {x, y, score}, ... }（中心点）
 static int l_findImage(lua_State *L) {
     const char *name = luaL_checkstring(L, 1);
     double sim = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : 0.9;
@@ -607,22 +621,25 @@ static int l_findImage(lua_State *L) {
     return 1;
 }
 
-// findText("设置") → { {x, y}, ... }（Vision OCR，中文/英文）
+// findText("设置") → { {x, y}, ... }（Vision OCR，中英文）
+// 注：performRequests 本身同步，无需额外信号量
 static int l_findText(lua_State *L) {
     const char *want = luaL_checkstring(L, 1);
+    // M2：want 可能不是合法 UTF-8，@(want) 会得到 nil → containsString:nil 抛异常 → SpringBoard 崩溃
+    NSString *wantStr = [NSString stringWithUTF8String:want];
+    if (!wantStr || wantStr.length == 0) { lua_pushnil(L); return 1; }
     ATBitmap b = {0};
     if (!ATCaptureScreen(&b)) { lua_pushnil(L); return 1; }
     CGImageRef img = ATCreateCGImageFromBitmap(&b);
     if (!img) { ATFreeBitmap(&b); lua_pushnil(L); return 1; }
 
     __block NSMutableArray *hits = [NSMutableArray array];
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     VNRecognizeTextRequest *req = [[VNRecognizeTextRequest alloc] initWithCompletionHandler:
         ^(VNRequest *request, NSError *error) {
             if (error) return;
             for (VNRecognizedText *t in request.results) {
                 NSString *s = [t topCandidates:1].firstObject.string;
-                if ([s containsString:@(want)]) {
+                if ([s containsString:wantStr]) {
                     CGRect bb = t.boundingBox; // 归一化、原点左下
                     double cx = (bb.origin.x + bb.size.width / 2) * b.w;
                     double cy = (1 - bb.origin.y - bb.size.height / 2) * b.h;
@@ -636,7 +653,6 @@ static int l_findText(lua_State *L) {
     VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:img options:@{}];
     NSError *err = nil;
     [handler performRequests:@[req] error:&err];
-    dispatch_semaphore_signal(sem);
     CGImageRelease(img);
 
     lua_newtable(L);
@@ -653,9 +669,10 @@ static int l_findText(lua_State *L) {
     ATFreeBitmap(&b);
     return 1;
 }
-// MVP 暂未实现的 API：保留函数名，避免老脚本直接报 nil 错误
+
+// MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite MVP yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.2.0 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -689,11 +706,11 @@ static const luaL_Reg ATLuaFuncs[] = {
     {NULL, NULL},
 };
 
-// AutoTouch 的 LuaLibraries/Extensions.lua 预加载机制：首次运行时落地为真实文件
+// ---- Extensions.lua（R17：v2 版本标记 + 版本感知覆写）----
 static NSString * const ATExtensionsLua = @R"(-- ATLite Extensions.lua v2 (AutoTouch API parity layer + humanized input)
 print = log
 
--- Lua 5.3 的 math.random 默认种子固定，不播种则每次运行序列相同 —— 用 /dev/urandom 播种
+-- Lua 5.3 math.random 默认种子固定 —— /dev/urandom 播种
 do
     local f = io.open("/dev/urandom", "rb")
     local seeded = false
@@ -725,9 +742,10 @@ ORIENTATION_TYPE = {
     LANDSCAPE_RIGHT = 4,
 }
 
+-- 真人按住 60-120ms（固定 16ms 是最典型的机器特征）
 function tap(x, y)
     touchDown(0, x, y)
-    usleep(math.random(60000, 120000))  -- 真人按住 60-120ms（原固定 16ms 是最典型的机器特征）
+    usleep(math.random(60000, 120000))
     touchUp(0, x, y)
 end
 
@@ -762,12 +780,9 @@ end
 function imagePath(name)
     return rootDir():gsub("Scripts$", "") .. "Images/" .. name
 end
-
--- TODO(MVP+): getColors/findColors/ocrText/dialog 在后续版本以原生实现补齐
 )";
 
-// Extensions.lua 版本感知落地：文件缺失或版本标记过期时，旧文件备份为 .bak 后覆写。
-// （否则已安装设备上的旧版 Extensions.lua 永远不会更新，拟人化改动不生效）
+// 版本感知落地：缺失或版本过期时，旧文件备份 .bak 后覆写（R17）
 static void ATEnsureLuaLibraries(void) {
     NSString *ext = [ATLibsDir() stringByAppendingPathComponent:@"Extensions.lua"];
     BOOL needsWrite = YES;
@@ -786,7 +801,7 @@ static void ATEnsureLuaLibraries(void) {
     ATLog(@"Extensions.lua v2 written to %@", ext);
 }
 
-// 执行: 先跑 LuaLibraries/Extensions.lua（可被用户覆盖），再跑脚本本体
+// 执行：先跑 Extensions.lua（可被用户覆盖），再跑脚本本体
 static void ATPlayLuaFile(NSString *scriptPath) {
     if (!gHIDReady) { ATLog(@"play aborted: HID not ready"); return; }
     if (![[NSFileManager defaultManager] fileExistsAtPath:scriptPath]) {
@@ -850,12 +865,15 @@ static void ATHandleCommand(void) {
 
     if ([action isEqualToString:@"run"]) {
         if (!ATIsSpringBoard()) return;
-        // 支持带或不带 .at 后缀
         NSString *n = [script.pathExtension.lowercaseString isEqualToString:@"at"]
             ? script : [script stringByAppendingPathExtension:@"at"];
         NSString *path = [ATScriptsDir() stringByAppendingPathComponent:n];
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            @autoreleasepool { ATPlayLuaFile(path); }
+            @autoreleasepool {
+                // M2：用户脚本是不可信输入，运行链路任何异常都不许击穿到 SpringBoard
+                @try { ATPlayLuaFile(path); }
+                @catch (NSException *e) { ATLog(@"script exception: %@", e); }
+            }
         });
     }
 }
@@ -887,6 +905,6 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"loaded in %@ (sb=%d)", NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard());
+        ATLog(@"v0.2.0 loaded in %@ (sb=%d)", NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard());
     }
 }
