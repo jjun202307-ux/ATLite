@@ -50,6 +50,14 @@ jobs:
           ls *.h | head -5
           ls *.c | wc -l
 
+      # iOS SDK 将 system() 标记为 unavailable(硬错误): 把 os.execute 改为恒失败桩
+      - name: Patch loslib.c for iOS
+        run: |
+          cd tweak/lib/lua53
+          grep -n "int stat = system(cmd);" loslib.c
+          sed -i 's|int stat = system(cmd);|int stat = -1; if (cmd == NULL) { lua_pushboolean(L, 0); return 1; } /* system() unavailable on iOS */|' loslib.c
+          ! grep -q "system(cmd)" loslib.c
+
       - name: Build package
         run: make package FINALPACKAGE=1
 

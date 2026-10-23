@@ -95,3 +95,38 @@ ATLiteTweak_CFLAGS = -fobjc-arc -Ilib/lua53 -Wno-deprecated-declarations
 5. `make package` 产出 `packages/*.deb`，Upload artifact 成功
 
 若任何一条不满足：停止、取日志、回到本计划书补充事实、修订方案后重来。
+
+---
+
+## 修订 1（run#10 结果 → 修订）
+
+### run#10 实际结果
+
+- ✅ 验收标准第 1 条通过：Vendor 步骤正常
+- ✅ 验收标准第 2 条部分通过：33 个 lua .c 全部进入编译，**除 loslib.c 外全部编译通过**（含此前从未验证过的 loadlib/liolib/llex 等）
+- ❌ 新失败点：`loslib.c:143: error: 'system' is unavailable: not available on iOS`
+
+### 新增事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F11 | iPhoneOS16.5 SDK 将 `system()` 标记为 **unavailable（硬错误）**，而非 deprecated | run#10 日志原文 + SDK `stdlib.h:184` |
+| F12 | loslib.c 非 POSIX 分支中调用的 libc 函数里，只有 `system` 是 unavailable；`tmpnam`（os.tmpname）、`getenv`、`exit` 等均可用。其余 32 个 lua 文件在 run#10 已实际编译通过 | loslib.c v5.3.6 原文（已抓取核对）+ run#10 编译日志 |
+
+### 修订方案（4.3，新增一步）
+
+在 Vendor Lua 之后新增 **Patch loslib** 步骤：用 sed 把 `os.execute` 的 `system(cmd)` 调用替换为恒失败桩，并断言补丁生效：
+
+```bash
+cd tweak/lib/lua53
+sed -i 's|int stat = system(cmd);|int stat = -1; if (cmd == NULL) { lua_pushboolean(L, 0); return 1; } /* system() unavailable on iOS */|' loslib.c
+! grep -q "system(cmd)" loslib.c   # 断言：调用已移除，否则步骤失败
+```
+
+语义说明：`os.execute(cmd)` 一律返回 nil（无法执行），`os.execute()`（无参探测 shell）返回 false。ATLite 脚本引擎不使用 os.execute，此行为符合预期。
+
+### 修订后检查清单（增量）
+
+- [ ] C7：build.yml 中 Patch 步骤位于 Vendor 之后、make 之前
+- [ ] C8：sed 模式串与 loslib.c 原文逐字一致（`int stat = system(cmd);`，已核对）
+- [ ] C9：断言命令 `! grep -q "system(cmd)"` 在位
