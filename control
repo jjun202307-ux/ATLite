@@ -1,0 +1,10 @@
+Package: me.atlite.ios
+Name: ATLite
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: AutoTouch-style script automation for rootless jailbreaks: Lua 5.3 engine, IOHIDEvent touch simulation, PC script import over HTTP.
+Section: Utilities
+Author: jjun
+Maintainer: jjun
+Depends: firmware (>= 15.0), ellekit | com.ex.substitute
+Tag: role::hacker

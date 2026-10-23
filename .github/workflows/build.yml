@@ -1,0 +1,40 @@
+name: Build ATLite
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  THEOS: /home/runner/theos
+  THEOS_PACKAGE_SCHEME: rootless
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y perl rsync curl xz-utils fakeroot git
+
+      - name: Setup Theos
+        run: |
+          git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS
+          git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks
+
+      - name: Vendor Lua 5.3.6
+        run: |
+          git clone --depth=1 --branch v5.3.6 https://github.com/lua/lua.git tweak/lib/lua53
+          rm -f tweak/lib/lua53/src/lua.c tweak/lib/lua53/src/luac.c tweak/lib/lua53/src/onelua.c
+
+      - name: Build package
+        run: make package FINALPACKAGE=1
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlite-deb
+          path: packages/*.deb
