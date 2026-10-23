@@ -130,3 +130,31 @@ sed -i 's|int stat = system(cmd);|int stat = -1; if (cmd == NULL) { lua_pushbool
 - [ ] C7：build.yml 中 Patch 步骤位于 Vendor 之后、make 之前
 - [ ] C8：sed 模式串与 loslib.c 原文逐字一致（`int stat = system(cmd);`，已核对）
 - [ ] C9：断言命令 `! grep -q "system(cmd)"` 在位
+
+---
+
+## 修订 2（run#11 结果 → 修订）
+
+### run#11 实际结果
+
+- ✅ loslib 补丁生效：`system` 错误消失，编译推进到 ltm.c/lundump.c
+- ❌ 新失败点：`lundump.c:244: error: adding 'int' to a string [-Werror,-Wstring-plus-int]`
+
+### 新增事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F13 | Theos 默认 CFLAGS 含 `-Werror`；`lundump.c:244` 的 `LUA_SIGNATURE + 1` 是 Lua 故意的指针惯用法（跳过签名首字符），clang 的 `-Wstring-plus-int` 警告在 -Werror 下升级为错误 | run#11 日志原文（含 "use array indexing to silence" 提示） |
+| F14 | 已知 lua 5.3.6 在 clang 下唯一惯用式警告即此一处；deprecated 警告（tmpnam 等）已被现有 `-Wno-deprecated-declarations` 覆盖 | run#10/#11 编译日志中其余文件零警告 |
+
+### 修订方案（4.4）
+
+`tweak/Makefile` 的 CFLAGS 追加 `-Wno-error=string-plus-int`（仅豁免该警告，不全局关闭 -Werror，Tweak.xm 自身代码仍受完整 -Werror 约束）：
+
+```makefile
+ATLiteTweak_CFLAGS = -fobjc-arc -Ilib/lua53 -Wno-deprecated-declarations -Wno-error=string-plus-int
+```
+
+### 修订后检查清单（增量）
+
+- [ ] C10：Makefile CFLAGS 行与 4.4 完全一致；仓库无其它 -Werror 相关配置需改动
