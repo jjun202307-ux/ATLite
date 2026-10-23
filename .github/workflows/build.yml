@@ -40,8 +40,8 @@ jobs:
 
       - name: Vendor Lua 5.3.6
         run: |
-          git clone --depth=1 --branch v5.3.6 https://github.com/lua/lua.git lib/lua53
-          rm -f lib/lua53/src/lua.c lib/lua53/src/luac.c lib/lua53/src/onelua.c
+          git clone --depth=1 --branch v5.3.6 https://github.com/lua/lua.git tweak/lib/lua53
+          rm -f tweak/lib/lua53/src/lua.c tweak/lib/lua53/src/luac.c tweak/lib/lua53/src/onelua.c
 
       - name: Build package
         run: make package FINALPACKAGE=1
