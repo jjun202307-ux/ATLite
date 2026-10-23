@@ -46,18 +46,17 @@ jobs:
       # 详见 docs/BUILD_PLAN.md F24-F27
       - name: Setup roothide scheme module
         run: |
-          mkdir -p $THEOS/vendor/mod/roothide/package
-          printf 'THEOS_PACKAGE_INSTALL_PREFIX = /rootfs/var/jb\n' > $THEOS/vendor/mod/roothide/package.mk
-          printf 'ifneq ($(THEOS_PACKAGE_ARCH),iphoneos-arm64e)\nTHEOS_PACKAGE_ARCH := iphoneos-arm64e\nendif\n' > $THEOS/vendor/mod/roothide/package/deb.mk
-          # scheme 非空时库搜索路径为 $THEOS/lib/iphone/<scheme>/ (不含 lib 根目录);
-          # Theos 对 iphone 实例无条件 -lroot_oldabi (clang-11 < 12, F31),
-          # rootless 目录的静态库对新 scheme 同样有效 (本项目未调用 libroot, F33)
-          mkdir -p $THEOS/lib/iphone/roothide
-          cp -r $THEOS/lib/iphone/rootless/. $THEOS/lib/iphone/roothide/
-          test -f $THEOS/lib/iphone/roothide/libroot_oldabi.a
-          echo "--- package.mk ---" && cat $THEOS/vendor/mod/roothide/package.mk
-          echo "--- package/deb.mk ---" && cat $THEOS/vendor/mod/roothide/package/deb.mk
-          echo "--- lib ---" && ls $THEOS/lib/iphone/roothide/ | head -5
+          set -ux
+          mkdir -p "$THEOS/vendor/mod/roothide/package"
+          printf 'THEOS_PACKAGE_INSTALL_PREFIX = /rootfs/var/jb\n' > "$THEOS/vendor/mod/roothide/package.mk"
+          printf 'ifneq ($(THEOS_PACKAGE_ARCH),iphoneos-arm64e)\nTHEOS_PACKAGE_ARCH := iphoneos-arm64e\nendif\n' > "$THEOS/vendor/mod/roothide/package/deb.mk"
+          ls -la "$THEOS/lib/iphone/" || echo "LIB_IPHONE_LIST_FAILED"
+          ls "$THEOS/lib/iphone/rootless/" 2>/dev/null | head -5 || echo "ROOTLESS_LIB_MISSING"
+          mkdir -p "$THEOS/lib/iphone/roothide"
+          cp -r "$THEOS/lib/iphone/rootless/." "$THEOS/lib/iphone/roothide/" || echo "CP_FAILED_CODE=$?"
+          ls "$THEOS/lib/iphone/roothide/" | head -8
+          test -f "$THEOS/lib/iphone/roothide/libroot_oldabi.a"
+          echo SETUP_SCHEME_OK
 
       # 注意: lua/lua 仓库所有源码都在根目录(没有 src/ 子目录, src/ 布局仅存在于官方 tarball)。
       # 必须删除: lua.c/luac.c/onelua.c(含 main(), 链接 dylib 会符号冲突)
