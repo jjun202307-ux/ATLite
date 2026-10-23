@@ -383,3 +383,47 @@ CI 的 roothide scheme 模块步骤中，将 rootless 的 lib 目录复制为 ro
 
 - [ ] C24：新产物 control.tar 含 postinst 且 data.tar 布局不变（arm64e + rootfs/var/jb）
 - [ ] C25：工作区 deb 与下载页 index.html 同步更新为新产物
+
+---
+
+## 修订 10（拟人化输入 + 修复两个会让真机触摸整个失效的 bug）
+
+### 问题
+
+用户要求三项拟人化：**点击坐标抖动、随机时间戳、随机接触面积**。
+
+### 新增事实（全部来自权威源码，非推测）
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F36 | IOKit 真实的 setter 符号是 `IOHIDEventSetIntegerValue(event, field, int32_t)` 与 `IOHIDEventSetFloatValue(event, field, IOHIDFloat)`；**`IOHIDEventSetInteger` 这个符号不存在** | nanotech/iphoneheaders IOHIDEvent.h L190-193；witchan/ios-mcp IOHIDPrivate.h L220-221（真机提取、专为 dlsym 编写）；KIF 直接链接调用 |
+| F37 | **当前代码 dlsym("IOHIDEventSetInteger") → NULL → 符号完整性检查失败 → gHIDReady=NO → 真机上所有触摸/按键静默失效**。CI 构建永远发现不了（dlsym 是运行时行为）——这是用户真机测试前必须修掉的头号 bug | 本地 Tweak.xm L114-128 逻辑 + F36 |
+| F38 | `kIOHIDEventFieldDigitizerIsDisplayIntegrated = 0x000B0019`（base+25），**不是** 0x000B000B（0x000B000B 是 BarrelPressure=base+11）。base = kIOHIDEventTypeDigitizer(11)<<16 = 0x000B0000 | WebKit 官方 IOKitSPIIOS.h L110-112：`MajorRadius = X+20`、`IsDisplayIntegrated = MajorRadius+5`；KIF 枚举顺序一致；rpc-project consts.py 一致；IDAObjcTypes Types.h L261/266 一致 |
+| F39 | `kIOHIDEventFieldDigitizerMajorRadius = 0x000B0014`，`MinorRadius = 0x000B0015` | WebKit（显式算式）；KIF 枚举；ZXTouch 文档 0xb0014/0xb0015 |
+| F40 | 坐标**直接传点值**（不归一化），配合 IsDisplayIntegrated=1——这是 Apple 自家测试框架 KIF 的用法（`locationInView` 直接传入） | KIF IOHIDEvent+KIF.m L161-180 |
+| F41 | 半径单位是 **mm**（Apple 头文件文档：默认 majorRadius=5mm）；KIF 传 5.0/5.0。真人指尖接触椭圆约 3.5~6mm | nanotech IOHIDEvent.h @discussion |
+| F42 | 参考实现的 hand（父）事件模式：index=0、identity=0、x/y/z=0、压力=0、mask=Touch、range=0、touch=true；位置与状态全部由 finger（子）事件携带。SimulateTouch（SpringBoard 上下文，最贴近本项目）与 KIF 完全一致 | SimulateTouch TouchSimulator.xm；KIF L139-154 |
+| F43 | finger 事件：index 从 1 起（KIF：touches+1）、identity=2（IOHIDFamily 源码注释 "identity = 2; // Multitouch interprets this as 'finger'"）、mask 动态（down/up=Range\|Touch，move=Position\|Touch）、range/touch = isTouching、tipPressure=0 | 同上 + blueboxd/IOHIDFamily IOHIDEvent.cpp |
+| F44 | 我们现有的 hand 事件参数（携带真实 x/y、pressure、动态 mask、identity=3）偏离所有参考实现，且**从未在真机验证过**（此前版本因 F37 触摸整个是死的） | 本地代码 L148-155 vs F42 |
+
+### 修订方案（4.12）
+
+**A. 修两个致命 bug（F37/F38）**：符号名改 `IOHIDEventSetIntegerValue`、新增 `IOHIDEventSetFloatValue`；IsDisplayIntegrated 改 0x000B0019。
+
+**B. 对齐参考实现（F42/F43）**：hand 事件改参考模式；finger index=finger+1、identity=2。
+
+**C. 三项拟人化**：
+1. 坐标抖动：`ATJitter()` —— down/up ±2pt、move ±1pt（真人无法精准复点同一像素）
+2. 随机时间戳：`ATTimestampNow()` = mach_absolute_time() ± 1ms（按 mach_timebase 换算 ticks）；tap() 按住时长从固定 16ms 改 60-120ms 随机（固定 16ms 是最典型的机器特征）
+3. 随机接触面积：majorRadius 3.5~6.0mm、minorRadius 2.5~4.5mm（minor≤major），经 `IOHIDEventSetFloatValue` 设置
+
+**D. Extensions.lua 升 v2**：加版本标记；Lua 5.3 默认种子固定，用 /dev/urandom 播种 math.random；`ATEnsureLuaLibraries` 改版本感知（旧文件备份为 .bak 后覆写——否则已安装设备上旧 Extensions.lua 不会更新）。
+
+### 修订后检查清单（增量）
+
+- [ ] C25：全仓无 `IOHIDEventSetInteger`（不带 Value）残留
+- [ ] C26：全仓无 `0x000B000B` 残留；0x000B0014/15/19 三个常量在位
+- [ ] C27：dlsym 列表与完整性检查含 SetIntegerValue + SetFloatValue
+- [ ] C28：hand 事件参数与 F42 一致；finger index=finger+1、identity=2
+- [ ] C29：Extensions.lua v2 标记 + randomseed + tap 60-120ms；ATEnsureLuaLibraries 版本逻辑读 "v2" 标记
+- [ ] C30：git diff 全量审查后才允许推送

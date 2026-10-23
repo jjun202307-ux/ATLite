@@ -92,7 +92,13 @@ enum {
     kIOHIDDigitizerEventPosition = 0x00000004,
 };
 enum { kIOHIDDigitizerTransducerTypeHand = 3 };
-#define kIOHIDEventFieldDigitizerIsDisplayIntegrated 0x000B000B
+// 字段值经 WebKit IOKitSPIIOS.h / KIF / rpc-project consts.py / IDAObjcTypes 四方一致推导：
+// base = kIOHIDEventTypeDigitizer(11) << 16 = 0x000B0000
+// MajorRadius = base+20，IsDisplayIntegrated = MajorRadius+5 = base+25
+// 注意：0x000B000B 是 BarrelPressure(base+11)，不是 IsDisplayIntegrated
+#define kIOHIDEventFieldDigitizerMajorRadius        0x000B0014
+#define kIOHIDEventFieldDigitizerMinorRadius        0x000B0015
+#define kIOHIDEventFieldDigitizerIsDisplayIntegrated 0x000B0019
 
 typedef struct CF_BRIDGED_TYPE(id) __IOHIDEvent *IOHIDEventRef;
 typedef struct CF_BRIDGED_TYPE(id) __IOHIDEventSystemClient *IOHIDEventSystemClientRef;
@@ -102,7 +108,9 @@ static void (*_AT_IOHIDEventSystemClientDispatchEvent)(IOHIDEventSystemClientRef
 static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
 static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
 static void (*_AT_IOHIDEventAppendEvent)(IOHIDEventRef, IOHIDEventRef, uint32_t);
-static void (*_AT_IOHIDEventSetInteger)(IOHIDEventRef, uint32_t, int64_t);
+// 注意：真实符号名是 ...Value 结尾（IOHIDEventSetInteger 这个符号不存在，dlsym 会返回 NULL）
+static void (*_AT_IOHIDEventSetIntegerValue)(IOHIDEventRef, uint32_t, int32_t);
+static void (*_AT_IOHIDEventSetFloatValue)(IOHIDEventRef, uint32_t, Float32);
 static IOHIDEventRef (*_AT_IOHIDEventCreateKeyboardEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, Boolean, uint32_t);
 
 static IOHIDEventSystemClientRef gHIDClient = nil;
@@ -117,12 +125,14 @@ static void ATLoadHIDSymbols(void) {
     ATSYM(_AT_IOHIDEventCreateDigitizerEvent,       "IOHIDEventCreateDigitizerEvent");
     ATSYM(_AT_IOHIDEventCreateDigitizerFingerEvent, "IOHIDEventCreateDigitizerFingerEvent");
     ATSYM(_AT_IOHIDEventAppendEvent,                "IOHIDEventAppendEvent");
-    ATSYM(_AT_IOHIDEventSetInteger,                 "IOHIDEventSetInteger");
+    ATSYM(_AT_IOHIDEventSetIntegerValue,            "IOHIDEventSetIntegerValue");
+    ATSYM(_AT_IOHIDEventSetFloatValue,              "IOHIDEventSetFloatValue");
     ATSYM(_AT_IOHIDEventCreateKeyboardEvent,        "IOHIDEventCreateKeyboardEvent");
 #undef ATSYM
     if (!_AT_IOHIDEventSystemClientCreate || !_AT_IOHIDEventSystemClientDispatchEvent ||
         !_AT_IOHIDEventCreateDigitizerEvent || !_AT_IOHIDEventCreateDigitizerFingerEvent ||
-        !_AT_IOHIDEventAppendEvent || !_AT_IOHIDEventSetInteger) {
+        !_AT_IOHIDEventAppendEvent || !_AT_IOHIDEventSetIntegerValue ||
+        !_AT_IOHIDEventSetFloatValue) {
         ATLog(@"IOHIDEvent symbols incomplete, touch sim disabled");
         return;
     }
@@ -133,29 +143,63 @@ static void ATLoadHIDSymbols(void) {
           _AT_IOHIDEventCreateKeyboardEvent ? @"YES" : @"NO");
 }
 
+// —— 拟人化三件套：坐标抖动 / 随机时间戳 / 随机接触面积 ——
+// 依据 BUILD_PLAN F40-F43：真人手指落点有 ±2pt 噪声、事件时间戳有 ±1ms 自然抖动、
+// 指尖接触椭圆 3.5~6mm（Apple 默认 5mm，单位 mm）
+
+// 返回 [-amount, +amount) 的均匀抖动
+static float ATJitter(float amount) {
+    return ((float)arc4random_uniform(2000) / 1999.0f * 2.0f - 1.0f) * amount;
+}
+
+// mach_absolute_time() ± 1ms（按 mach_timebase 正确换算为 ticks）
+static uint64_t ATTimestampNow(void) {
+    static mach_timebase_info_data_t tb = {0, 0};
+    if (tb.denom == 0) mach_timebase_info(&tb);
+    if (tb.numer == 0 || tb.denom == 0) return mach_absolute_time();
+    uint64_t half = (1000000ULL * (uint64_t)tb.numer) / (uint64_t)tb.denom; // 1ms → ticks
+    if (half == 0 || half > 0x7fffffffULL) return mach_absolute_time();
+    return mach_absolute_time() + (int64_t)arc4random_uniform((uint32_t)(half * 2)) - (int64_t)half;
+}
+
 // action: 0=down 1=move 2=up （与 AutoTouch touchDown/touchMove/touchUp 对应）
 static void ATSimulateTouch(int action, int finger, float x, float y) {
     if (!gHIDReady) return;
-    uint64_t ts = mach_absolute_time();
-    BOOL isDown = (action == 0), isUp = (action == 2);
-    uint32_t mask;
-    Boolean range, touch;
-    Float32 pressure;
-    if (isDown)      { mask = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch;    range = YES; touch = YES; pressure = 1.0f; }
-    else if (isUp)   { mask = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch;    range = NO;  touch = NO;  pressure = 0.0f; }
-    else             { mask = kIOHIDDigitizerEventPosition | kIOHIDDigitizerEventTouch; range = YES; touch = YES; pressure = 1.0f; }
+    uint64_t ts = ATTimestampNow();
+    BOOL isUp = (action == 2);
+    uint32_t mask = (action == 1)
+        ? (kIOHIDDigitizerEventPosition | kIOHIDDigitizerEventTouch)
+        : (kIOHIDDigitizerEventRange   | kIOHIDDigitizerEventTouch);
+    Boolean touching = isUp ? 0 : 1;
 
+    // 1) 坐标抖动：down/up ±2pt、move ±1pt（真人无法精准复点同一像素；
+    //    down 与 up 各自独立抖动，天然形成按住期间的微漂移）
+    float j = (action == 1) ? 1.0f : 2.0f;
+    x += ATJitter(j);
+    y += ATJitter(j);
+
+    // 3) 随机接触面积：major 3.5~6.0mm、minor 2.5~4.5mm（minor ≤ major）
+    float major = 3.5f + (float)arc4random_uniform(251) / 100.0f;
+    float minor = 2.5f + (float)arc4random_uniform(201) / 100.0f;
+    if (minor > major) minor = major;
+
+    // hand（父事件）：与 SimulateTouch/KIF 参考实现一致——位置/压力为 0，
+    // 由 finger 子事件携带坐标与触摸状态（F42）
     IOHIDEventRef hand = _AT_IOHIDEventCreateDigitizerEvent(
         kCFAllocatorDefault, ts, kIOHIDDigitizerTransducerTypeHand,
-        0, kIOHIDDigitizerTransducerTypeHand, mask, 0,
-        x, y, 0, pressure, 0, range, touch, 0);
+        0, 0, kIOHIDDigitizerEventTouch, 0,
+        0, 0, 0, 0, 0, 0, true, 0);
+    // finger（子事件）：index 从 1 起、identity=2（IOHIDFamily：multitouch 视 2 为 finger）（F43）
     IOHIDEventRef fg = _AT_IOHIDEventCreateDigitizerFingerEvent(
         kCFAllocatorDefault, ts,
-        (uint32_t)finger, (uint32_t)(finger + 2), mask, 0,
-        x, y, 0, pressure, 0, range, touch, 0);
+        (uint32_t)(finger + 1), 2, mask,
+        x, y, 0, 0, 0, touching, touching, 0);
     if (!hand || !fg) { if (hand) CFRelease(hand); if (fg) CFRelease(fg); return; }
     _AT_IOHIDEventAppendEvent(hand, fg, 0);
-    _AT_IOHIDEventSetInteger(hand, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
+    _AT_IOHIDEventSetIntegerValue(hand, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
+    _AT_IOHIDEventSetIntegerValue(fg,   kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
+    _AT_IOHIDEventSetFloatValue(fg, kIOHIDEventFieldDigitizerMajorRadius, major);
+    _AT_IOHIDEventSetFloatValue(fg, kIOHIDEventFieldDigitizerMinorRadius, minor);
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, hand);
     CFRelease(hand);
     CFRelease(fg);
@@ -166,7 +210,7 @@ static void ATSimulateTouch(int action, int finger, float x, float y) {
 static void ATSimulateKey(BOOL down, int usage) {
     if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent) return;
     IOHIDEventRef ev = _AT_IOHIDEventCreateKeyboardEvent(
-        kCFAllocatorDefault, mach_absolute_time(),
+        kCFAllocatorDefault, ATTimestampNow(),
         AT_HID_USAGE_PAGE_CONSUMER, (uint32_t)usage, down ? TRUE : FALSE, 0);
     if (!ev) return;
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, ev);
@@ -630,8 +674,25 @@ static const luaL_Reg ATLuaFuncs[] = {
 };
 
 // AutoTouch 的 LuaLibraries/Extensions.lua 预加载机制：首次运行时落地为真实文件
-static NSString * const ATExtensionsLua = @R"(-- ATLite Extensions.lua (AutoTouch API parity layer)
+static NSString * const ATExtensionsLua = @R"(-- ATLite Extensions.lua v2 (AutoTouch API parity layer + humanized input)
 print = log
+
+-- Lua 5.3 的 math.random 默认种子固定，不播种则每次运行序列相同 —— 用 /dev/urandom 播种
+do
+    local f = io.open("/dev/urandom", "rb")
+    local seeded = false
+    if f then
+        local s = f:read(8)
+        f:close()
+        if s and #s == 8 then
+            local n = 0
+            for i = 1, 8 do n = n * 256 + s:byte(i) end
+            math.randomseed(n % 0x7fffffff)
+            seeded = true
+        end
+    end
+    if not seeded then math.randomseed(os.time()) end
+end
 
 KEY_TYPE = {
     HOME_BUTTON       = 0x40,
@@ -650,7 +711,7 @@ ORIENTATION_TYPE = {
 
 function tap(x, y)
     touchDown(0, x, y)
-    usleep(16000)
+    usleep(math.random(60000, 120000))  -- 真人按住 60-120ms（原固定 16ms 是最典型的机器特征）
     touchUp(0, x, y)
 end
 
@@ -689,12 +750,24 @@ end
 -- TODO(MVP+): getColors/findColors/ocrText/dialog 在后续版本以原生实现补齐
 )";
 
+// Extensions.lua 版本感知落地：文件缺失或版本标记过期时，旧文件备份为 .bak 后覆写。
+// （否则已安装设备上的旧版 Extensions.lua 永远不会更新，拟人化改动不生效）
 static void ATEnsureLuaLibraries(void) {
     NSString *ext = [ATLibsDir() stringByAppendingPathComponent:@"Extensions.lua"];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:ext]) {
-        [ATExtensionsLua writeToFile:ext atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        ATLog(@"Extensions.lua created at %@", ext);
+    BOOL needsWrite = YES;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:ext]) {
+        NSString *cur = [NSString stringWithContentsOfFile:ext encoding:NSUTF8StringEncoding error:nil];
+        if (cur && [cur containsString:@"ATLite Extensions.lua v2"]) needsWrite = NO;
     }
+    if (!needsWrite) return;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:ext]) {
+        NSString *bak = [ext stringByAppendingString:@".bak"];
+        [[NSFileManager defaultManager] removeItemAtPath:bak error:nil];
+        [[NSFileManager defaultManager] copyItemAtPath:ext toPath:bak error:nil];
+        ATLog(@"Extensions.lua old version backed up to %@", bak);
+    }
+    [ATExtensionsLua writeToFile:ext atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    ATLog(@"Extensions.lua v2 written to %@", ext);
 }
 
 // 执行: 先跑 LuaLibraries/Extensions.lua（可被用户覆盖），再跑脚本本体
