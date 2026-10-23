@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>ATLite</string>
 	<key>CFBundleExecutable</key>
-	<string>$(EXECUTABLE_NAME)</string>
+	<string>ATLite</string>
 	<key>CFBundleIdentifier</key>
 	<string>me.atlite.ATLite</string>
 	<key>CFBundleInfoDictionaryVersion</key>

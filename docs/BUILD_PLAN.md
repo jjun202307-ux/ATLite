@@ -456,3 +456,32 @@ CI 的 roothide scheme 模块步骤中，将 rootless 的 lib 目录复制为 ro
 - [ ] C31：finger typedef 参数个数 = 13；调用实参 = 13
 - [ ] C32：CaptureDisplay typedef = (uint32_t, CFStringRef, CFDictionaryRef)；调用 (0, CFSTR("LCD"), NULL) + "Main" 回退；无 CreateServer 残留
 - [ ] C33：IOSurfaceLock/Unlock 为可选符号（缺失不阻塞 capture ready）
+
+---
+
+## 修订 12（真机 App 闪退根因：Info.plist 占位符未替换）
+
+### 真机现象
+
+deb 安装成功，但点击 ATLite 图标 App 立即闪退（无法打开）。
+
+### 根因（已从 run#25 产物解包实锤）
+
+实装到 `ATLite.app/Info.plist` 的 `CFBundleExecutable` 是字面量 `$(EXECUTABLE_NAME)` —— 这是 Xcode 的构建变量占位符，**Theos 不做替换**。SpringBoard/launcher 按 CFBundleExecutable 定位可执行文件，找不到名为 `$(EXECUTABLE_NAME)` 的二进制 → 启动即失败。
+
+### 事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F49 | Theos 打包时不替换 Info.plist 中的 Xcode 风格 `$(VAR)` 占位符 | run#25 deb 解包：data.tar 内 Info.plist 仍含 `$(EXECUTABLE_NAME)` 原文 |
+| F50 | 仓库 Info.plist 全文仅此一处 `$(...)` 占位符 | grep 确认 |
+
+### 修订方案（4.14）
+
+`app/Resources/Info.plist`：`$(EXECUTABLE_NAME)` → `ATLite`（与应用二进制名/CFBundleName 一致）。
+
+### 检查清单（增量）
+
+- [x] C34：全文件无 `$(...)` 残留
+- [x] C35：plistlib 解析通过，CFBundleExecutable == ATLite == 实际二进制名（app/Makefile APPLICATION_NAME）
+- [ ] C37：新产物 deb 解包后 Info.plist 的 CFBundleExecutable == ATLite（产物级验证）
