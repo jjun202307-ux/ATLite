@@ -324,3 +324,30 @@ dpkg: error processing archive .../ATLite_0.1.0_iphoneos-arm64.deb (--install):
 - [ ] C19：env + Makefile + tweak/Makefile + app/Makefile 共 4 处 scheme 均为 roothide；全仓无残留 rootless（排除 docs 历史记录）
 - [ ] C20：postinst 存在、git 模式下为 755、含 `|| true` 容错
 - [ ] C21：control Architecture 与 index.html 文件名同步为 arm64e
+
+---
+
+## 修订 8（run#18 结果 → 修订）
+
+### run#18 实际结果
+
+- ✅ 33 个 Lua 文件 + Tweak.xm 双架构编译全部通过（roothide scheme 不影响编译）
+- ❌ 链接阶段（arm64/arm64e 双双）：`ld: library not found for -lroot_oldabi`
+
+### 新增事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F31 | Theos 对 `THEOS_TARGET_NAME=iphone` 的实例无条件加 `-lroot$(ABI_SUFFIX)`；`ABI_SUFFIX` 由 `IS_NEW_ABI` 决定：clang < 12（L1ghtmann clang-11）→ `_oldabi` | makefiles/instance/rules.mk L126-142 |
+| F32 | scheme 非空时，Theos 库搜索路径为 `$THEOS/lib/iphone/<scheme>/`（**不含** lib 根目录）；rootless 目录含 `libroot.a`+`libroot_oldabi.a`+各 .tbd，故 rootless 构建可链接；roothide 目录不存在 → ld 失败 | common.mk L195-203；theos/lib 仓库 API |
+| F33 | 本项目的 dylib/App 未调用任何 libroot 函数（未 import rootless.h），`-lroot_oldabi` 仅为 Theos 无条件添加，静态库中未引用符号不会进入产物 | 代码审查；静态库链接语义 |
+
+### 修订方案（4.10）
+
+CI 的 roothide scheme 模块步骤中，将 rootless 的 lib 目录复制为 roothide：
+`cp -r $THEOS/lib/iphone/rootless/. $THEOS/lib/iphone/roothide/`（libroot_oldabi.a 等对新 scheme 同样有效——F33）。
+
+### 修订后检查清单（增量）
+
+- [ ] C22：lib 复制步骤在 Setup roothide scheme module 内、Build package 之前
+- [ ] C23：复制后 `$THEOS/lib/iphone/roothide/libroot_oldabi.a` 存在（CI 内断言）
