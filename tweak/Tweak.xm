@@ -25,6 +25,13 @@ extern "C" {
 #include <lauxlib.h>
 }
 
+// theos SDK 的 Vision 头不含 VNRecognizedText.h(仅 @class 前置声明)。
+// 以下 API 运行时 iOS 13+ 存在(部署目标 14.0),仅补编译期声明。
+@interface VNRecognizedText (ATLiteSDKCompat)
+- (NSArray<VNRecognizedText *> *)topCandidates:(NSUInteger)maxCandidateCount;
+@property (nonatomic, readonly) CGRect boundingBox;
+@end
+
 #define AT_DARWIN_NOTIFY @"me.atlite.command"
 
 #pragma mark - Paths
@@ -576,8 +583,10 @@ static int l_findText(lua_State *L) {
     int n = 0;
     for (NSArray *pt in hits) {
         lua_newtable(L);
-        lua_pushinteger(L, pt[0].intValue); lua_rawseti(L, -2, 1);
-        lua_pushinteger(L, pt[1].intValue); lua_rawseti(L, -2, 2);
+        NSNumber *x = pt.firstObject;
+        NSNumber *y = pt.lastObject;
+        lua_pushinteger(L, x.intValue); lua_rawseti(L, -2, 1);
+        lua_pushinteger(L, y.intValue); lua_rawseti(L, -2, 2);
         lua_rawseti(L, -2, ++n);
     }
     if (n == 0) ATLog(@"findText: no match for %s", want);

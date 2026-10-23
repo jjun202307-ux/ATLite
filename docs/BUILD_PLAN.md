@@ -158,3 +158,52 @@ ATLiteTweak_CFLAGS = -fobjc-arc -Ilib/lua53 -Wno-deprecated-declarations -Wno-er
 ### 修订后检查清单（增量）
 
 - [ ] C10：Makefile CFLAGS 行与 4.4 完全一致；仓库无其它 -Werror 相关配置需改动
+
+---
+
+## 修订 3（run#12 结果 → 修订）
+
+### run#12 实际结果
+
+- ✅ **33 个 lua .c 全部编译通过，Lua 层打通**
+- ❌ 新失败点：Tweak.xm 自身 4 个错误（557/559/579/580），全部集中在 Vision OCR 段
+
+### 新增事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F15 | theos iPhoneOS16.5.sdk 的 `Vision.framework/Headers` **没有 VNRecognizedText.h**（目录清单已核对），VNRecognizedText 仅有 `@class` 前置声明 → 编译器不知道 `topCandidates:`/`boundingBox`。这些 API 运行时 iOS 13+ 存在，部署目标 14.0 | theos/sdks 仓库 Vision.framework/Headers 目录清单（API 查询） |
+| F16 | `pt[0].intValue`（id 接收者的属性点语法）在该工具链下报 "property not found on object of type 'id'"；改用类型化局部变量静态绑定即可 | run#12 日志 |
+
+### 修订方案（4.5）
+
+1. Tweak.xm 在 import 之后加 SDK 兼容类别（运行期安全，仅补编译期声明）：
+
+```objc
+@interface VNRecognizedText (ATLiteSDKCompat)
+- (NSArray<VNRecognizedText *> *)topCandidates:(NSUInteger)maxCandidateCount;
+@property (nonatomic, readonly) CGRect boundingBox;
+@end
+```
+
+2. `findText` 结果循环改为类型化局部变量：
+
+```objc
+for (NSArray *pt in hits) {
+    lua_newtable(L);
+    NSNumber *x = pt.firstObject;
+    NSNumber *y = pt.lastObject;
+    lua_pushinteger(L, x.intValue); lua_rawseti(L, -2, 1);
+    lua_pushinteger(L, y.intValue); lua_rawseti(L, -2, 2);
+    lua_rawseti(L, -2, ++n);
+}
+```
+
+### 风险登记（更新）
+
+- Tweak.xm 修复后：链接 dylib → app 子项目（**从未被构建验证**，普通 UIKit 代码，无三方依赖）→ 打包 deb。若 app 失败，按同一流程处理。
+
+### 修订后检查清单（增量）
+
+- [ ] C11：类别声明位置在 import 之后、首次使用之前；CGRect 类型已可见（CoreGraphics 已导入）
+- [ ] C12：findText 循环与 4.5 一致，全文件不再有对 id 的属性点访问（grep 确认）
