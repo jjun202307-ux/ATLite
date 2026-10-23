@@ -38,10 +38,17 @@ jobs:
           $THEOS/toolchain/linux/iphone/bin/clang --version | head -1
           ls $THEOS/sdks
 
+      # 注意: lua/lua 仓库所有源码都在根目录(没有 src/ 子目录, src/ 布局仅存在于官方 tarball)。
+      # 必须删除: lua.c/luac.c/onelua.c(含 main(), 链接 dylib 会符号冲突)
+      #           ltests.c(调试文件, 不在官方默认构建列表, 会重定义内部符号)
       - name: Vendor Lua 5.3.6
         run: |
           git clone --depth=1 --branch v5.3.6 https://github.com/lua/lua.git tweak/lib/lua53
-          rm -f tweak/lib/lua53/src/lua.c tweak/lib/lua53/src/luac.c tweak/lib/lua53/src/onelua.c
+          cd tweak/lib/lua53
+          rm -rf .git manual testes makefile all
+          rm -f lua.c luac.c onelua.c ltests.c ltests.h
+          ls *.h | head -5
+          ls *.c | wc -l
 
       - name: Build package
         run: make package FINALPACKAGE=1
