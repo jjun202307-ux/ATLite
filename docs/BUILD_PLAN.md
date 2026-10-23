@@ -207,3 +207,29 @@ for (NSArray *pt in hits) {
 
 - [ ] C11：类别声明位置在 import 之后、首次使用之前；CGRect 类型已可见（CoreGraphics 已导入）
 - [ ] C12：findText 循环与 4.5 一致，全文件不再有对 id 的属性点访问（grep 确认）
+
+---
+
+## 修订 4（run#13 结果 → 修订）
+
+### run#13 实际结果
+
+- ✅ **tweak 全部完成：33 个 lua .c + Tweak.xm 在 arm64/arm64e 双架构编译并链接成功**（`==> Linking tweak ATLiteTweak` 通过，仅有一条 `-undefined dynamic_lookup` 弃用警告，非错误）
+- ❌ 失败点移至 app 子项目：`main.m:5: use of undeclared identifier 'ATLAppDelegate'`
+
+### 新增事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F17 | `main.m` 缺 `#import "ATLAppDelegate.h"`；同类问题：`ATLRootViewController.m` 也缺 `#import "ATLRootViewController.h"`（`@implementation` 需要可见的类声明，将是下一个错误） | 本地源码核查（run#13 中该文件尚未编译到） |
+| F18 | app 其余文件导入完备：ATLAppDelegate.m 导入两个头 ✅；ATLWebServer.m 导入自身头 ✅；交叉引用（ATLRootViewController→ATLWebServer 等）均有可见声明 | 本地源码核查 |
+
+### 修订方案（4.6）
+
+1. `app/Source/main.m`：加 `#import "ATLAppDelegate.h"`
+2. `app/Source/ATLRootViewController.m`：加 `#import "ATLRootViewController.h"`
+
+### 修订后检查清单（增量）
+
+- [ ] C13：两处 import 已加；app 全部 4 个 .m 的 `@implementation` 类在编译单元内均有可见 `@interface`（import 链核查）
+- [ ] C14：全仓 grep 确认无其它 "用类但未导入头" 的情况
