@@ -13,7 +13,6 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 #import <Vision/Vision.h>
-#import <IOSurface/IOSurface.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
 #import <sys/stat.h>
@@ -167,21 +166,36 @@ static void ATSimulateKey(BOOL down, int usage) {
     CFRelease(ev);
 }
 
-#pragma mark - Screen capture (CARenderServer, SpringBoard 私有方案)
+#pragma mark - Screen capture (CARenderServer + IOSurface, 全部 dlsym 绕开 SDK 头文件)
 
 typedef struct OpaqueCARenderServer *CARenderServerRef;
+typedef struct CF_BRIDGED_TYPE(id) __IOSurface *IOSurfaceRef;
 static CARenderServerRef (*_AT_CARenderServerCreateServer)(void);
 static IOSurfaceRef (*_AT_CARenderServerCaptureDisplay)(CARenderServerRef, uint32_t, CFDictionaryRef);
+static size_t (*_AT_IOSurfaceGetWidth)(IOSurfaceRef);
+static size_t (*_AT_IOSurfaceGetHeight)(IOSurfaceRef);
+static size_t (*_AT_IOSurfaceGetBytesPerRow)(IOSurfaceRef);
+static uint32_t (*_AT_IOSurfaceGetPixelFormat)(IOSurfaceRef);
+static void * (*_AT_IOSurfaceGetBaseAddress)(IOSurfaceRef);
 static CARenderServerRef gRenderServer = nil;
 static BOOL gCaptureReady = NO;
 
 static void ATLoadCaptureSymbols(void) {
     void *qc = dlopen("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", RTLD_NOW);
-    if (!qc) { ATLog(@"QuartzCore dlopen failed"); return; }
+    void *ios = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_NOW);
+    if (!qc || !ios) { ATLog(@"QuartzCore/IOSurface dlopen failed: %s / %s",
+                             qc ? "ok" : dlerror(), ios ? "ok" : dlerror()); return; }
     _AT_CARenderServerCreateServer   = (typeof(_AT_CARenderServerCreateServer))dlsym(qc, "CARenderServerCreateServer");
     _AT_CARenderServerCaptureDisplay = (typeof(_AT_CARenderServerCaptureDisplay))dlsym(qc, "CARenderServerCaptureDisplay");
-    if (!_AT_CARenderServerCreateServer || !_AT_CARenderServerCaptureDisplay) {
-        ATLog(@"CARenderServer symbols missing, capture disabled");
+    _AT_IOSurfaceGetWidth            = (typeof(_AT_IOSurfaceGetWidth))dlsym(ios, "IOSurfaceGetWidth");
+    _AT_IOSurfaceGetHeight           = (typeof(_AT_IOSurfaceGetHeight))dlsym(ios, "IOSurfaceGetHeight");
+    _AT_IOSurfaceGetBytesPerRow      = (typeof(_AT_IOSurfaceGetBytesPerRow))dlsym(ios, "IOSurfaceGetBytesPerRow");
+    _AT_IOSurfaceGetPixelFormat      = (typeof(_AT_IOSurfaceGetPixelFormat))dlsym(ios, "IOSurfaceGetPixelFormat");
+    _AT_IOSurfaceGetBaseAddress      = (typeof(_AT_IOSurfaceGetBaseAddress))dlsym(ios, "IOSurfaceGetBaseAddress");
+    if (!_AT_CARenderServerCreateServer || !_AT_CARenderServerCaptureDisplay ||
+        !_AT_IOSurfaceGetWidth || !_AT_IOSurfaceGetHeight || !_AT_IOSurfaceGetBytesPerRow ||
+        !_AT_IOSurfaceGetPixelFormat || !_AT_IOSurfaceGetBaseAddress) {
+        ATLog(@"CARenderServer/IOSurface symbols incomplete, capture disabled");
         return;
     }
     gRenderServer = _AT_CARenderServerCreateServer();
@@ -201,11 +215,11 @@ static BOOL ATCaptureScreen(ATBitmap *out) {
     if (!gCaptureReady) return NO;
     IOSurfaceRef s = _AT_CARenderServerCaptureDisplay(gRenderServer, 0, NULL);
     if (!s) return NO;
-    int w = (int)IOSurfaceGetWidth(s);
-    int h = (int)IOSurfaceGetHeight(s);
-    size_t pitch = IOSurfaceGetBytesPerRow(s);
-    uint32_t fmt = IOSurfaceGetPixelFormat(s); // 'BGRA' 或 'ARGB'
-    uint8_t *base = (uint8_t *)IOSurfaceGetBaseAddress(s);
+    int w = (int)_AT_IOSurfaceGetWidth(s);
+    int h = (int)_AT_IOSurfaceGetHeight(s);
+    size_t pitch = _AT_IOSurfaceGetBytesPerRow(s);
+    uint32_t fmt = _AT_IOSurfaceGetPixelFormat(s); // 'BGRA' 或 'ARGB'
+    uint8_t *base = (uint8_t *)_AT_IOSurfaceGetBaseAddress(s);
     if (w <= 0 || h <= 0) { CFRelease(s); return NO; }
     out->w = w; out->h = h;
     out->rgba = (uint8_t *)malloc((size_t)w * h * 4);
