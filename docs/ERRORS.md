@@ -33,6 +33,12 @@
 - **现象**：run#24 编译报 too few arguments 之前，旧代码靠多传一个 `0` 绕过编译——但会把 range/touch/options 错位到错误寄存器，即使 E1 修好触摸也是错的。
 - **R5：typedef 参数个数必须与权威头文件逐个参数核对；"多传一个 0 能编译"不是正确性证据，是寄存器错位的证据。**
 
+### E21. dispatch_once block 内调用间接依赖自身的函数 → 重入死锁
+- **现象**：v0.3.0 的 ATJBRoot 在 once block 里加了一行 ATLog 做诊断。ATLog → ATLogsDir() → ATBaseDir() → ATJBRoot() —— 回到同一个尚未完成的 dispatch_once token，永久自旋。SpringBoard 注入即死锁，真机必现。
+- **根因**：dispatch_once 不可重入。block 内调用的任何函数，其（间接）依赖图不允许回到该 once 保护的函数本身。
+- **为什么没发现**：改动只有一行日志，看起来人畜无害；评审（子代理两段式）顺依赖链才抓到。
+- **R21：dispatch_once block 内禁止调用任何（间接）依赖本 once 函数的接口；诊断需求改用"block 内设标志、block 外输出"模式（见 gJBRootSource）。静态守卫：verify_static.py C1 断言。**
+
 ## B. 打包/元数据错误（CI 绿勾，真机才炸）
 
 ### E6. Info.plist 用了 Xcode 占位符 → App 点图标立即闪退

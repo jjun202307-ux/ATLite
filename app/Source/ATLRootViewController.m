@@ -4,14 +4,31 @@
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 
-// 与 tweak 共享的路径逻辑（App 侧独立实现）
+// jbroot 推导（RESEARCH D1 的 App 侧落实）：
+// 自身安装于 <jbroot>/Applications/ATLite.app —— 以 mainBundle.bundlePath 去后缀推导
+// （与安装路径天然一致，不依赖探测），探测仅作回退。结果缓存，与 tweak 侧同模式。
 static NSString *ATLJBRoot(void) {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if ([fm fileExistsAtPath:@"/var/jb"]) return @"/var/jb";
-    for (NSString *n in [fm contentsOfDirectoryAtPath:@"/var/mobile" error:nil]) {
-        if ([n hasPrefix:@".jbroot-"]) return [@"/var/mobile/" stringByAppendingString:n];
-    }
-    return @"/var/jb";
+    static NSString *root = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *bp = [NSBundle mainBundle].bundlePath;
+        NSRange r = [bp rangeOfString:@"/Applications/ATLite.app" options:NSBackwardsSearch];
+        if (r.location != NSNotFound && r.location > 0) {
+            root = [bp substringToIndex:r.location];
+            return;
+        }
+        // 回退：探测（未知安装方式下的兜底）
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if ([fm fileExistsAtPath:@"/var/jb"]) { root = @"/var/jb"; return; }
+        for (NSString *n in [fm contentsOfDirectoryAtPath:@"/var/mobile" error:nil]) {
+            if ([n hasPrefix:@".jbroot-"]) {
+                root = [@"/var/mobile/" stringByAppendingString:n];
+                return;
+            }
+        }
+        root = @"/var/jb"; // fallback
+    });
+    return root;
 }
 static NSString *ATLBaseDir(void) {
     return [ATLJBRoot() stringByAppendingString:@"/var/mobile/Library/ATLite"];

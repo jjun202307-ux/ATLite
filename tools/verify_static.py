@@ -140,6 +140,71 @@ def main(root):
     check("M3 seed前建目录", "seedBundledScripts" in vc and
           vc.find("createDirectoryAtPath:ATLScriptsDir") < vc.find("copyItemAtPath:bundled"))
 
+    # ---- v0.3.0 新规格（RESEARCH.md 取证驱动）----
+    # I1: 图标声明（AutoTouch 实证键结构）
+    pl_keys = plistlib.loads(plist_raw.encode())
+    icons = pl_keys.get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {})
+    check("I1 图标声明 CFBundleIconFiles", "AppIcon60x60" in icons.get("CFBundleIconFiles", []))
+    check("I1 CFBundleIconName", icons.get("CFBundleIconName") == "AppIcon")
+
+    # I2: 图标 PNG 真实存在且尺寸正确
+    import struct as _st
+    for fname, size in [("AppIcon60x60@2x.png", 120), ("AppIcon60x60@3x.png", 180)]:
+        p = os.path.join(root, "app/Resources", fname)
+        ok = False
+        if os.path.isfile(p):
+            with open(p, "rb") as f:
+                head = f.read(24)
+            if head[:8] == b"\x89PNG\r\n\x1a\n":
+                w, h = _st.unpack(">II", head[16:24])
+                ok = (w, h) == (size, size)
+        check("I2 %s %dx%d" % (fname, size, size), ok)
+
+    # I3: entitlements 四个键（AutoTouch 二进制实证清单）
+    ent_path = os.path.join(root, "app/entitlements.plist")
+    if os.path.isfile(ent_path):
+        ent = plistlib.load(open(ent_path, "rb"))
+        need = ["platform-application", "com.apple.private.security.no-sandbox",
+                "com.apple.private.security.storage.AppBundles",
+                "com.apple.private.security.storage.AppDataContainers"]
+        missing = [k for k in need if ent.get(k) is not True]
+        check("I3 entitlements 四键全真", not missing, "缺%s" % missing)
+    else:
+        check("I3 entitlements.plist 存在", False)
+
+    # I4: app/Makefile 带 entitlements 签名参数（rules.mk 实例级覆写机制）
+    check("I4 CODESIGN_FLAGS 带 entitlements",
+          "CODESIGN_FLAGS" in app_mk and "entitlements.plist" in app_mk)
+
+    # I5: 点/像素归一化（AutoTouch getScreenScale 实证区分）
+    check("I5 抓屏缩放归一化", "ATCaptureScale" in tweak_code)
+
+    # I6: jbroot 以自身路径推导，探测为回退（tweak 侧 dladdr / app 侧 bundlePath）
+    check("I6 tweak 侧 dladdr 推导 jbroot", "dladdr" in tweak_code)
+    vc_code = strip_comments(vc)
+    check("I6 app 侧 bundlePath 推导 jbroot",
+          "mainBundle].bundlePath" in vc_code and "/Applications/ATLite.app" in vc_code)
+
+    # C1/E21: dispatch_once block 内禁止 ATLog（ATLog→ATLogsDir→ATBaseDir→ATJBRoot 重入死锁）
+    m_once = re.search(r"ATJBRoot\(void\)\s*\{(.*?)\n\}\n", tweak, flags=re.S)
+    if m_once:
+        once_body = m_once.group(1)
+        blk = once_body[once_body.find("dispatch_once"):] if "dispatch_once" in once_body else once_body
+        check("C1 once block 内无 ATLog", "ATLog" not in strip_comments(blk))
+    else:
+        check("C1 ATJBRoot 函数可定位", False)
+
+    # Minor2: findText 输出与其余 API 统一 llround（禁 intValue 截断）
+    check("Minor2 findText llround 统一",
+          "llround(x.doubleValue)" in tweak_code and "x.intValue" not in tweak_code)
+
+    # Minor1: 仅支持 iPhone，无 CFBundleIcons~ipad 段
+    check("Minor1 无 CFBundleIcons~ipad", "CFBundleIcons~ipad" not in plist_raw)
+
+    # V: 版本三处同步 0.3.0
+    check("V 版本0.3.0三处同步",
+          "Version: 0.3.0" in ctrl and "<string>0.3.0</string>" in plist_raw and "v0.3.0" in tweak)
+
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)
     check("Lua vendor 路径", "-Ilib/lua53" in read(root, "tweak/Makefile"))

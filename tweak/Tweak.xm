@@ -1,4 +1,4 @@
-// ATLiteTweak v0.2.0 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.0 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -45,21 +45,36 @@ extern "C" {
 
 #pragma mark - Paths
 
-// rootless 根路径: Dopamine=/var/jb, roothide=/var/mobile/.jbroot-XXXXXXXX
+// jbroot 推导（RESEARCH D1）：以自身 dylib 路径推导（与安装路径天然一致），探测仅作回退
+static NSString *gJBRootSource = nil; // 诊断用：记录推导方式
 static NSString *ATJBRoot(void) {
     static NSString *root = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+        // 自身安装于 <jbroot>/Library/MobileSubstrate/DynamicLibraries/ATLiteTweak.dylib
+        // ⚠ C1 教训：本 block 内禁止 ATLog（ATLog→ATLogsDir→ATBaseDir→ATJBRoot 重入死锁）
+        Dl_info info;
+        if (dladdr((void *)ATJBRoot, &info) && info.dli_fname) {
+            NSString *selfPath = [NSString stringWithUTF8String:info.dli_fname];
+            NSRange r = [selfPath rangeOfString:@"/Library/MobileSubstrate/DynamicLibraries/"];
+            if (r.location != NSNotFound && r.location > 0) {
+                root = [selfPath substringToIndex:r.location];
+                gJBRootSource = @"dladdr";
+                return;
+            }
+        }
         NSFileManager *fm = [NSFileManager defaultManager];
-        if ([fm fileExistsAtPath:@"/var/jb"]) { root = @"/var/jb"; return; }
+        if ([fm fileExistsAtPath:@"/var/jb"]) { root = @"/var/jb"; gJBRootSource = @"probe:/var/jb"; return; }
         NSArray *cands = [fm contentsOfDirectoryAtPath:@"/var/mobile" error:nil];
         for (NSString *n in cands) {
             if ([n hasPrefix:@".jbroot-"]) {
                 root = [@"/var/mobile/" stringByAppendingString:n];
+                gJBRootSource = @"probe:.jbroot";
                 return;
             }
         }
         root = @"/var/jb"; // fallback
+        gJBRootSource = @"fallback";
     });
     return root;
 }
@@ -280,6 +295,10 @@ static void ATLoadCaptureSymbols(void) {
 
 typedef struct { uint8_t *rgba; int w, h; } ATBitmap;
 
+// RESEARCH C3：抓屏位图是物理像素，Lua 坐标是点。
+// 自适应换算（位图宽/屏幕点宽），不假设 2x/3x —— 1x 时恒为 1，无损害。
+static double ATCaptureScale(const ATBitmap *b);
+
 static void ATFreeBitmap(ATBitmap *b) {
     if (b->rgba) { free(b->rgba); b->rgba = NULL; }
     b->w = b->h = 0;
@@ -498,6 +517,14 @@ static CGSize ATScreenSize(void) {
     return s;
 }
 
+// RESEARCH C3：位图像素宽 / 屏幕点宽 = 缩放（1x 设备为 1，无损害）
+static double ATCaptureScale(const ATBitmap *b) {
+    CGSize pts = ATScreenSize();
+    if (pts.width <= 0 || b->w <= 0) return 1.0;
+    double s = (double)b->w / pts.width;
+    return s > 0 ? s : 1.0;
+}
+
 static int l_touchDown(lua_State *L) {
     ATSimulateTouch(0, (int)luaL_checkinteger(L,1), (float)luaL_checknumber(L,2), (float)luaL_checknumber(L,3));
     return 0;
@@ -556,13 +583,15 @@ static int l_stop(lua_State *L) {
 }
 
 static int l_getColor(lua_State *L) {
-    int x = (int)luaL_checkinteger(L, 1);
+    int x = (int)luaL_checkinteger(L, 1);   // 点坐标（Lua 层契约）
     int y = (int)luaL_checkinteger(L, 2);
     ATBitmap b = {0};
     if (!ATCaptureScreen(&b)) { lua_pushnil(L); return 1; }
-    if (x < 0 || y < 0 || x >= b.w || y >= b.h) { ATFreeBitmap(&b); lua_pushnil(L); return 1; }
-    const uint8_t *px = b.rgba + ((size_t)y * b.w + x) * 4;
-    lua_pushinteger(L, (px[0] << 16) | (px[1] << 8) | px[2]);
+    double scale = ATCaptureScale(&b);      // 点 → 像素
+    int px = (int)llround(x * scale), py = (int)llround(y * scale);
+    if (px < 0 || py < 0 || px >= b.w || py >= b.h) { ATFreeBitmap(&b); lua_pushnil(L); return 1; }
+    const uint8_t *pxp = b.rgba + ((size_t)py * b.w + px) * 4;
+    lua_pushinteger(L, (pxp[0] << 16) | (pxp[1] << 8) | pxp[2]);
     ATFreeBitmap(&b);
     return 1;
 }
@@ -574,17 +603,18 @@ static int l_findColor(lua_State *L) {
     uint8_t cr = (color >> 16) & 0xFF, cg = (color >> 8) & 0xFF, cb = color & 0xFF;
     ATBitmap b = {0};
     if (!ATCaptureScreen(&b)) { lua_pushnil(L); return 1; }
-    int scale = 4, sw = b.w / scale, sh = b.h / scale;
+    int scanScale = 4, sw = b.w / scanScale, sh = b.h / scanScale;
+    double ptScale = ATCaptureScale(&b);    // 像素 → 点（返回给 Lua）
     lua_newtable(L);
     int n = 0;
     for (int y = 0; y < sh && n < 10; y++) {
         for (int x = 0; x < sw && n < 10; x++) {
-            const uint8_t *px = b.rgba + ((size_t)(y * scale) * b.w + x * scale) * 4;
+            const uint8_t *px = b.rgba + ((size_t)(y * scanScale) * b.w + x * scanScale) * 4;
             int dr = px[0] - (int)cr, dg = px[1] - (int)cg, db2 = px[2] - (int)cb;
             if (abs(dr) <= tol && abs(dg) <= tol && abs(db2) <= tol) {
                 lua_newtable(L);
-                lua_pushinteger(L, x * scale); lua_rawseti(L, -2, 1);
-                lua_pushinteger(L, y * scale); lua_rawseti(L, -2, 2);
+                lua_pushinteger(L, (lua_Integer)llround(x * scanScale / ptScale)); lua_rawseti(L, -2, 1);
+                lua_pushinteger(L, (lua_Integer)llround(y * scanScale / ptScale)); lua_rawseti(L, -2, 2);
                 lua_rawseti(L, -2, ++n);
             }
         }
@@ -601,6 +631,7 @@ static int l_findImage(lua_State *L) {
     if (!ATLoadTemplate(name, &tmpl)) { ATLog(@"findImage: template not found: %s", name); lua_pushnil(L); return 1; }
     ATBitmap screen = {0};
     if (!ATCaptureScreen(&screen)) { ATFreeBitmap(&tmpl); lua_pushnil(L); return 1; }
+    double ptScale = ATCaptureScale(&screen); // 释放前取（像素→点）
     ATGray screenGray = {0};
     BOOL haveGray = ATRGBAToGray(&screen, &screenGray);
     ATFreeBitmap(&screen);
@@ -610,9 +641,10 @@ static int l_findImage(lua_State *L) {
     lua_newtable(L);
     int n = 0;
     if (ATFindImageInScreen(&screenGray, &tmpl, sim, &x, &y, &score)) {
+        // 像素 → 点（中心点返回，供 tap 直接用）
         lua_newtable(L);
-        lua_pushinteger(L, x + tmpl.w / 2); lua_rawseti(L, -2, 1);
-        lua_pushinteger(L, y + tmpl.h / 2); lua_rawseti(L, -2, 2);
+        lua_pushinteger(L, (lua_Integer)llround((x + tmpl.w / 2.0) / ptScale)); lua_rawseti(L, -2, 1);
+        lua_pushinteger(L, (lua_Integer)llround((y + tmpl.h / 2.0) / ptScale)); lua_rawseti(L, -2, 2);
         lua_pushnumber(L, score);           lua_rawseti(L, -2, 3);
         lua_rawseti(L, -2, ++n);
     }
@@ -634,15 +666,16 @@ static int l_findText(lua_State *L) {
     if (!img) { ATFreeBitmap(&b); lua_pushnil(L); return 1; }
 
     __block NSMutableArray *hits = [NSMutableArray array];
+    double ptScale = ATCaptureScale(&b);    // 像素 → 点
     VNRecognizeTextRequest *req = [[VNRecognizeTextRequest alloc] initWithCompletionHandler:
         ^(VNRequest *request, NSError *error) {
             if (error) return;
             for (VNRecognizedText *t in request.results) {
                 NSString *s = [t topCandidates:1].firstObject.string;
                 if ([s containsString:wantStr]) {
-                    CGRect bb = t.boundingBox; // 归一化、原点左下
-                    double cx = (bb.origin.x + bb.size.width / 2) * b.w;
-                    double cy = (1 - bb.origin.y - bb.size.height / 2) * b.h;
+                    CGRect bb = t.boundingBox; // 归一化、原点左下 → 像素中心 → 点
+                    double cx = (bb.origin.x + bb.size.width / 2) * b.w / ptScale;
+                    double cy = (1 - bb.origin.y - bb.size.height / 2) * b.h / ptScale;
                     [hits addObject:@[@(cx), @(cy)]];
                 }
             }
@@ -661,8 +694,9 @@ static int l_findText(lua_State *L) {
         lua_newtable(L);
         NSNumber *x = pt.firstObject;
         NSNumber *y = pt.lastObject;
-        lua_pushinteger(L, x.intValue); lua_rawseti(L, -2, 1);
-        lua_pushinteger(L, y.intValue); lua_rawseti(L, -2, 2);
+        // Minor 2 修复：与其余 API 统一 llround 四舍五入（intValue 直接截断会偏左上）
+        lua_pushinteger(L, (lua_Integer)llround(x.doubleValue)); lua_rawseti(L, -2, 1);
+        lua_pushinteger(L, (lua_Integer)llround(y.doubleValue)); lua_rawseti(L, -2, 2);
         lua_rawseti(L, -2, ++n);
     }
     if (n == 0) ATLog(@"findText: no match for %s", want);
@@ -672,7 +706,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.2.0 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.0 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -905,6 +939,8 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.2.0 loaded in %@ (sb=%d)", NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard());
+        ATLog(@"v0.3.0 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+              NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
+              ATJBRoot(), gJBRootSource ?: @"?");
     }
 }
