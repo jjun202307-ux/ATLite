@@ -4,8 +4,9 @@
 #import <sys/socket.h>
 #import <unistd.h>
 #import <pthread.h>
+#import <string.h>
 
-static const size_t ATMaxBody = 8 * 1024 * 1024; // 8MB
+static const unsigned long ATLMaxBody = 8 * 1024 * 1024; // 8MB
 
 @interface ATLWebServer ()
 @property (nonatomic, copy) NSString *rootPath;
@@ -27,9 +28,9 @@ static const size_t ATMaxBody = 8 * 1024 * 1024; // 8MB
 
 - (BOOL)isRunning { return _running; }
 
-#pragma mark - Helpers
+#pragma mark - Path helpers
 
-// 允许: .at/.lua -> Scripts/, .png/.jpg/.jpeg -> Images/
+// 允许: .at/.lua -> Scripts/, .png/.jpg/.jpeg -> Images/（白名单，防目录穿越）
 - (NSString *)subdirForExtension:(NSString *)ext {
     if ([ext isEqualToString:@"at"] || [ext isEqualToString:@"lua"]) return @"Scripts";
     if ([ext isEqualToString:@"png"] || [ext isEqualToString:@"jpg"] || [ext isEqualToString:@"jpeg"]) return @"Images";
@@ -46,10 +47,6 @@ static const size_t ATMaxBody = 8 * 1024 * 1024; // 8MB
     return raw;
 }
 
-- (NSString *)percentDecode:(NSString *)s {
-    return [s stringByRemovingPercentEncoding] ?: s;
-}
-
 - (NSString *)pathForName:(NSString *)name {
     NSString *sub = [self subdirForExtension:name.pathExtension.lowercaseString];
     return [[self.rootPath stringByAppendingPathComponent:sub] stringByAppendingPathComponent:name];
@@ -57,7 +54,7 @@ static const size_t ATMaxBody = 8 * 1024 * 1024; // 8MB
 
 #pragma mark - HTTP primitives
 
-static void ATSendAll(int fd, const void *buf, size_t len) {
+static void ATLSendAll(int fd, const void *buf, size_t len) {
     size_t off = 0;
     while (off < len) {
         ssize_t n = send(fd, (const char *)buf + off, len - off, 0);
@@ -66,20 +63,22 @@ static void ATSendAll(int fd, const void *buf, size_t len) {
     }
 }
 
-static void ATSendResponse(int fd, int code, NSString *contentType, NSData *body) {
+static void ATLSendResponse(int fd, int code, NSString *contentType, NSData *body) {
     NSString *status = code == 200 ? @"OK" : (code == 400 ? @"Bad Request" :
-                       code == 404 ? @"Not Found" : (code == 500 ? @"Internal Server Error" : @"Error"));
+                       code == 404 ? @"Not Found" : @"Error");
     NSString *head = [NSString stringWithFormat:
         @"HTTP/1.1 %d %@\r\nContent-Type: %@; charset=utf-8\r\nContent-Length: %lu\r\n"
         @"Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
         code, status, contentType, (unsigned long)body.length];
-    ATSendAll(fd, head.UTF8String, strlen(head.UTF8String));
-    if (body.length) ATSendAll(fd, body.bytes, body.length);
+    ATLSendAll(fd, head.UTF8String, strlen(head.UTF8String));
+    if (body.length) ATLSendAll(fd, body.bytes, body.length);
 }
 
-static void ATSendText(int fd, int code, NSString *text) {
-    ATSendResponse(fd, code, @"text/plain", [text dataUsingEncoding:NSUTF8StringEncoding]);
+static void ATLSendText(int fd, int code, NSString *text) {
+    ATLSendResponse(fd, code, @"text/plain", [text dataUsingEncoding:NSUTF8StringEncoding]);
 }
+
+#pragma mark - Pages
 
 - (NSData *)indexPage {
     NSString *html = @"<!DOCTYPE html><html><head><meta charset='utf-8'>"
@@ -119,7 +118,7 @@ static void ATSendText(int fd, int code, NSString *text) {
 }
 
 - (NSData *)listJSONForDir:(NSString *)dir {
-    NSString *sub = [dir isEqualToString:@"images"] ? @"Images" : @"Scripts";
+    NSString *sub = [dir isEqualToString:@"Images"] ? @"Images" : @"Scripts";
     NSString *path = [self.rootPath stringByAppendingPathComponent:sub];
     NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:path error:nil];
     NSMutableArray *names = [NSMutableArray array];
@@ -167,12 +166,12 @@ static void ATSendText(int fd, int code, NSString *text) {
                 break;
             }
         }
-        if (!header) { ATSendText(fd, 400, @"header too large"); close(fd); return; }
+        if (!header) { ATLSendText(fd, 400, @"header too large"); close(fd); return; }
 
         NSArray *lines = [header componentsSeparatedByString:@"\r\n"];
         NSString *reqLine = lines.firstObject ?: @"";
         NSArray *parts = [reqLine componentsSeparatedByString:@" "];
-        if (parts.count < 2) { ATSendText(fd, 400, @"bad request"); close(fd); return; }
+        if (parts.count < 2) { ATLSendText(fd, 400, @"bad request"); close(fd); return; }
         NSString *method = parts[0];
         NSString *target = parts[1];
 
@@ -183,7 +182,7 @@ static void ATSendText(int fd, int code, NSString *text) {
                                  [NSCharacterSet whitespaceCharacterSet]].longLongValue;
             }
         }
-        if (contentLength > ATMaxBody) { ATSendText(fd, 400, @"body too large"); close(fd); return; }
+        if (contentLength > ATLMaxBody) { ATLSendText(fd, 400, @"body too large"); close(fd); return; }
         while (buf.length < headerLen + contentLength) {
             char tmp[16384];
             ssize_t n = recv(fd, tmp, sizeof(tmp), 0);
@@ -218,7 +217,7 @@ static void ATSendText(int fd, int code, NSString *text) {
     NSString *path = [target componentsSeparatedByString:@"?"].firstObject;
 
     if ([method isEqualToString:@"GET"] && [path isEqualToString:@"/"]) {
-        ATSendResponse(fd, 200, @"text/html", [self indexPage]);
+        ATLSendResponse(fd, 200, @"text/html", [self indexPage]);
         return;
     }
 
@@ -226,47 +225,47 @@ static void ATSendText(int fd, int code, NSString *text) {
     NSString *dir = [q[@"dir"] isEqualToString:@"images"] ? @"Images" : @"Scripts";
 
     if ([method isEqualToString:@"GET"] && [path isEqualToString:@"/api/list"]) {
-        ATSendResponse(fd, 200, @"application/json", [self listJSONForDir:dir]);
+        ATLSendResponse(fd, 200, @"application/json", [self listJSONForDir:dir]);
         return;
     }
 
-    NSString *name = [self percentDecode:q[@"name"] ?: @""];
+    NSString *name = [q[@"name"] stringByRemovingPercentEncoding] ?: @"";
     BOOL valid = NO;
     NSString *safe = [self sanitizeName:name valid:&valid];
 
     if ([method isEqualToString:@"GET"] && [path isEqualToString:@"/api/get"]) {
-        if (!valid) { ATSendText(fd, 400, @"invalid name"); return; }
+        if (!valid) { ATLSendText(fd, 400, @"invalid name"); return; }
         NSData *d = [NSData dataWithContentsOfFile:[self pathForName:safe]];
-        if (!d) { ATSendText(fd, 404, @"not found"); return; }
-        ATSendResponse(fd, 200, @"application/octet-stream", d);
+        if (!d) { ATLSendText(fd, 404, @"not found"); return; }
+        ATLSendResponse(fd, 200, @"application/octet-stream", d);
         return;
     }
     if ([method isEqualToString:@"PUT"] && [path isEqualToString:@"/api/put"]) {
-        if (!valid) { ATSendText(fd, 400, @"invalid name (allowed: .at .lua .png .jpg .jpeg)"); return; }
+        if (!valid) { ATLSendText(fd, 400, @"invalid name (allowed: .at .lua .png .jpg .jpeg)"); return; }
         if (![body writeToFile:[self pathForName:safe] atomically:YES]) {
-            ATSendText(fd, 500, @"write failed");
+            ATLSendText(fd, 500, @"write failed");
             return;
         }
-        ATSendText(fd, 200, @"OK");
+        ATLSendText(fd, 200, @"OK");
         return;
     }
     if ([method isEqualToString:@"DELETE"] && [path isEqualToString:@"/api/del"]) {
-        if (!valid) { ATSendText(fd, 400, @"invalid name"); return; }
+        if (!valid) { ATLSendText(fd, 400, @"invalid name"); return; }
         [[NSFileManager defaultManager] removeItemAtPath:[self pathForName:safe] error:nil];
-        ATSendText(fd, 200, @"OK");
+        ATLSendText(fd, 200, @"OK");
         return;
     }
-    ATSendText(fd, 404, @"not found");
+    ATLSendText(fd, 404, @"not found");
 }
 
 #pragma mark - Server loop
 
 typedef struct {
-    __strong ATLWebServer *server;
+    __unsafe_unretained ATLWebServer *server; // server 由主线程持有，连接线程只借用
     int fd;
 } ATLConnCtx;
 
-static void *ATConnThread(void *rawCtx) {
+static void *ATLConnThread(void *rawCtx) {
     ATLConnCtx *ctx = (ATLConnCtx *)rawCtx;
     ATLWebServer *server = ctx->server;
     int fd = ctx->fd;
@@ -277,7 +276,7 @@ static void *ATConnThread(void *rawCtx) {
     return NULL;
 }
 
-static void *ATServerThread(void *ctx) {
+static void *ATLServerThread(void *ctx) {
     ATLWebServer *self = (__bridge ATLWebServer *)ctx;
     while (self.running) {
         int conn = accept(self.listenFD, NULL, NULL);
@@ -286,7 +285,7 @@ static void *ATServerThread(void *ctx) {
         ctx->server = self;
         ctx->fd = conn;
         pthread_t t;
-        pthread_create(&t, NULL, ATConnThread, ctx);
+        pthread_create(&t, NULL, ATLConnThread, ctx);
         pthread_detach(t);
     }
     return NULL;
@@ -308,12 +307,12 @@ static void *ATServerThread(void *ctx) {
     self.listenFD = fd;
     self.running = YES;
     pthread_t t;
-    pthread_create(&t, NULL, ATServerThread, (__bridge void *)self);
+    pthread_create(&t, NULL, ATLServerThread, (__bridge void *)self);
     pthread_detach(t);
     return YES;
 }
 
-- (void)stop {
+- (void)shutdownServer {
     self.running = NO;
     if (self.listenFD >= 0) { close(self.listenFD); self.listenFD = -1; }
 }

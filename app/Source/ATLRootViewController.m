@@ -55,7 +55,13 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
                                                                              target:self action:@selector(refresh)];
     self.navigationItem.rightBarButtonItem = refresh;
 
-    [self startServer];
+    // 启动期任何异常都不允许杀死 App（v0.1.0 "打不开"的教训：启动链路必须防御）
+    @try {
+        [self seedBundledScripts]; // R9/E9：首次启动释放随包自检脚本
+        [self startServer];
+    } @catch (NSException *e) {
+        self.statusLabel.text = [NSString stringWithFormat:@"启动异常: %@", e];
+    }
     [self refresh];
 }
 
@@ -64,6 +70,23 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
     CGFloat top = self.view.safeAreaInsets.top + 8;
     self.statusLabel.frame = CGRectMake(8, top, self.view.bounds.size.width - 16, 40);
     self.table.contentInset = UIEdgeInsetsMake(48, 0, 0, 0);
+}
+
+#pragma mark - Bundled scripts (R9/E9)
+
+// 首次启动：把随包的 test.at 复制进 Scripts 目录（已存在则不覆盖，尊重用户修改）
+- (void)seedBundledScripts {
+    // M3：目录必须先建（fresh 环境下 tweak %ctor 可能还没跑过，copy 静默失败即 R9 落空）
+    [[NSFileManager defaultManager] createDirectoryAtPath:ATLScriptsDir()
+                              withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *testPath = [ATLScriptsDir() stringByAppendingPathComponent:@"test.at"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:testPath]) return;
+    NSString *bundled = [[NSBundle mainBundle] pathForResource:@"test" ofType:@"at"];
+    if (!bundled) return;
+    NSError *err = nil;
+    if ([[NSFileManager defaultManager] copyItemAtPath:bundled toPath:testPath error:&err]) {
+        NSLog(@"[ATLite] seeded test.at -> %@", testPath);
+    }
 }
 
 #pragma mark - Server
@@ -79,7 +102,7 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
                 char buf[INET_ADDRSTRLEN] = {0};
                 struct sockaddr_in *sa = (struct sockaddr_in *)i->ifa_addr;
                 inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf));
-                ip = [NSMutableString stringWithUTF8String:buf];
+                [ip setString:[NSString stringWithUTF8String:buf]];
                 break;
             }
         }
