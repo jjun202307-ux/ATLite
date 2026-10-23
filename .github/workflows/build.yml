@@ -26,6 +26,13 @@ jobs:
           rm -rf $THEOS/sdks
           git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks
 
+      - name: Install iOS toolchain (Linux)
+        run: |
+          curl -LO https://github.com/sbingner/llvm-project/releases/download/v10.0.0-1/linux-ios-arm64e-clang-toolchain.tar.gz
+          mkdir -p $THEOS/toolchain/linux/iphone
+          tar -zxf linux-ios-arm64e-clang-toolchain.tar.gz -C $THEOS/toolchain/linux/iphone --strip-components=1
+          $THEOS/toolchain/linux/iphone/bin/clang --version | head -1
+
       - name: Vendor Lua 5.3.6
         run: |
           git clone --depth=1 --branch v5.3.6 https://github.com/lua/lua.git tweak/lib/lua53
