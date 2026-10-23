@@ -15,23 +15,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 官方 install-theos 脚本要求的依赖: ldid(打包签名) + xz-utils(解压工具链)
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y perl rsync curl xz-utils fakeroot git
+          sudo apt-get install -y bash curl perl rsync xz-utils fakeroot ldid git
 
+      # 官方安装规则:
+      # 1) theos 本体 (recursive, 含 vendor/logos 等)
+      # 2) 工具链: L1ghtmann/llvm-project latest, iOSToolchain-x86_64.tar.xz -> $THEOS/toolchain/
+      # 3) SDK: $THEOS/bin/install-sdk latest
       - name: Setup Theos
         run: |
           git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS
-          rm -rf $THEOS/sdks
-          git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks
-
-      - name: Install iOS toolchain (Linux)
-        run: |
-          curl -LO https://github.com/sbingner/llvm-project/releases/download/v10.0.0-2/linux-ios-arm64e-clang-toolchain.tar.lzma
-          mkdir -p $THEOS/toolchain/linux/iphone
-          tar --lzma -xf linux-ios-arm64e-clang-toolchain.tar.lzma -C $THEOS/toolchain/linux/iphone --strip-components=1
+          curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz | tar -xJf - -C $THEOS/toolchain/
+          $THEOS/bin/install-sdk latest
+          test -x $THEOS/toolchain/linux/iphone/bin/clang
           $THEOS/toolchain/linux/iphone/bin/clang --version | head -1
+          ls $THEOS/sdks
 
       - name: Vendor Lua 5.3.6
         run: |
