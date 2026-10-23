@@ -23,6 +23,7 @@ jobs:
       - name: Setup Theos
         run: |
           git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS
+          rm -rf $THEOS/sdks
           git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks
 
       - name: Vendor Lua 5.3.6
