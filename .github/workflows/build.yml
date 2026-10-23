@@ -15,11 +15,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 官方 install-theos 脚本要求的依赖: ldid(打包签名) + xz-utils(解压工具链)
+      # 官方 install-theos 脚本要求的依赖: ldid(打包签名,Ubuntu apt 无此包,取 Procursus 官方二进制)
+      # + xz-utils(解压工具链与 SDK)
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bash curl perl rsync xz-utils fakeroot ldid git
+          sudo apt-get install -y bash curl perl rsync xz-utils fakeroot git
+          sudo curl -sL -o /usr/local/bin/ldid https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64
+          sudo chmod +x /usr/local/bin/ldid
+          ldid -V | head -1
 
       # 官方安装规则:
       # 1) theos 本体 (recursive, 含 vendor/logos 等)
