@@ -351,3 +351,35 @@ CI 的 roothide scheme 模块步骤中，将 rootless 的 lib 目录复制为 ro
 
 - [ ] C22：lib 复制步骤在 Setup roothide scheme module 内、Build package 之前
 - [ ] C23：复制后 `$THEOS/lib/iphone/roothide/libroot_oldabi.a` 存在（CI 内断言）
+
+---
+
+## 修订 9（run#20/#21 结果 → 修订与收官）
+
+### run#20 实际结果（set -x 追踪）
+
+`ls $THEOS/lib/iphone/rootless/` **无输出** → 主仓库 `lib/iphone/rootless` 是**空壳目录**；真实库在 `$THEOS/vendor/lib/iphone/rootless`（recursive clone 的 theos/lib 子模块——rootless 构建（run#16）时 ld 就是从这里找到 `libroot_oldabi.a` 的，common.mk 搜索路径 vendor 在前）。
+
+### run#21 实际结果
+
+- ✅ **构建成功**，产物 `me.atlite.ios_0.1.0_iphoneos-arm64e.deb`
+- ✅ control：`Architecture: iphoneos-arm64e`（roothide 设备可装）
+- ✅ data.tar：`rootfs/var/jb/Applications/ATLite.app` + `rootfs/var/jb/Library/MobileSubstrate/DynamicLibraries/ATLiteTweak.dylib` + `ATLiteTweak.plist`
+- ✅ dylib fat：arm64(subtype 0x0) + arm64e(subtype 0x2)
+- ❌ **control.tar 缺 postinst**：子项目 `app/layout/DEBIAN/postinst` 未进入聚合包
+
+### 新增事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F34 | Theos 主仓库 `lib/iphone/rootless` 为空壳；真实库在 `vendor/lib/iphone/rootless`（theos/lib 子模块）；common.mk 的 scheme 搜索路径 vendor 在前 | run#20 set -x 日志；theos/lib 仓库 API |
+| F35 | `_THEOS_HAS_STAGING_LAYOUT` 在顶层 make 解析时一次性计算并导出，聚合子项目的 `layout/` 检测失效——子项目 `app/layout/DEBIAN/` 不会进包；**根级 `layout/DEBIAN/` 才会被顶层 internal-stage rsync** | common.mk L133-135 guard；run#21 产物 control.tar 仅含 control |
+
+### 修订方案（4.11）
+
+`git mv app/layout/DEBIAN/postinst layout/DEBIAN/postinst`（根级 layout，F35）。
+
+### 修订后检查清单（增量）
+
+- [ ] C24：新产物 control.tar 含 postinst 且 data.tar 布局不变（arm64e + rootfs/var/jb）
+- [ ] C25：工作区 deb 与下载页 index.html 同步更新为新产物
