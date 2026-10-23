@@ -427,3 +427,32 @@ CI 的 roothide scheme 模块步骤中，将 rootless 的 lib 目录复制为 ro
 - [ ] C28：hand 事件参数与 F42 一致；finger index=finger+1、identity=2
 - [ ] C29：Extensions.lua v2 标记 + randomseed + tap 60-120ms；ATEnsureLuaLibraries 版本逻辑读 "v2" 标记
 - [ ] C30：git diff 全量审查后才允许推送
+
+---
+
+## 修订 11（run#24 编译错误 + 抓屏签名的真机级取证）
+
+### run#24 实际结果
+
+`Tweak.xm:196: error: too few arguments to function call, expected 14, have 13`
+
+### 新增事实（反汇编 AutoTouch libATGraphic.iOS15.0.dylib 实证）
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F45 | finger 事件 typedef 多一个 uint32（14 vs 真实 13）。原代码靠多传一个 `0` 绕过编译，但会把 range/touch/options 错位到错误寄存器（x5/x6/x7 偏移）——**即原版触摸即使符号修好也是错的** | 真实签名（nanotech/iphoneheaders IOHIDEvent.h）：`IOHIDEventCreateDigitizerFingerEvent(allocator, timeStamp, index, identity, eventMask, x, y, z, tipPressure, twist, range, touch, options)` = 13 参；SimulateTouch 实参 13 个 |
+| F46 | AutoTouch 抓屏**不用 CaptureDisplay**，而是 `IOSurfaceCreate` + `CARenderServerRenderDisplay(0, CFSTR("LCD"), surface, 0, 0)` + `IOSurfaceLock/Unlock` + `IOSurfaceGetBaseAddress` | libATGraphic 导入符号表：仅 `_CARenderServerRenderDisplay`（无 CreateServer/CaptureDisplay）；调用点 0xf713dc 反汇编：`mov w0,#0; adrp/add x1→CFString"LCD"; ldr x2,[x19+0x58](surface); mov w3,#0; mov w4,#0; bl` |
+| F47 | CARenderServer 家族首参数为 `uint32_t serverPort`（0=默认），第二参数为**显示屏名 CFStringRef**（iOS 上 "LCD"，备选 "Main"）——`CaptureDisplay(port, displayName, options) → IOSurfaceRef` | F46 的 RenderDisplay(0, @"LCD", ...) + witchan/ios-mcp（真机工具）：`CARenderServerCaptureDisplayFunc = CGImageRef(*)(uint32_t serverPort, CFStringRef displayName, CFDictionaryRef options)`，实参 `(0, @"LCD"/@"Main", nil)`，返回值送 `UICreateCGImageFromIOSurface`（证明实为 IOSurfaceRef） |
+| F48 | 键盘事件真实签名 usagePage/usage 为 uint16_t（值 0x0C/0x40 等均 < 0x10000，uint32 传参兼容但按真实类型收窄） | nanotech/iphoneheaders IOHIDEvent.h L150 |
+
+### 修订方案（4.13）
+
+1. finger typedef 14→13（对齐真实签名，修 run#24 编译错误；新调用本就 13 参）
+2. 抓屏改 `CaptureDisplay(0, CFSTR("LCD"), NULL)`，失败回退 `(0, CFSTR("Main"), NULL)`；删 CreateServer；读前后加可选 `IOSurfaceLock/Unlock`（kIOSurfaceLockReadOnly=1）
+3. 键盘 typedef usagePage/usage 收窄为 uint16_t
+
+### 修订后检查清单（增量）
+
+- [ ] C31：finger typedef 参数个数 = 13；调用实参 = 13
+- [ ] C32：CaptureDisplay typedef = (uint32_t, CFStringRef, CFDictionaryRef)；调用 (0, CFSTR("LCD"), NULL) + "Main" 回退；无 CreateServer 残留
+- [ ] C33：IOSurfaceLock/Unlock 为可选符号（缺失不阻塞 capture ready）

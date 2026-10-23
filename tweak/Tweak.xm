@@ -106,12 +106,14 @@ typedef struct CF_BRIDGED_TYPE(id) __IOHIDEventSystemClient *IOHIDEventSystemCli
 static IOHIDEventSystemClientRef (*_AT_IOHIDEventSystemClientCreate)(CFAllocatorRef);
 static void (*_AT_IOHIDEventSystemClientDispatchEvent)(IOHIDEventSystemClientRef, IOHIDEventRef);
 static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
-static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
+// 真实签名（nanotech/iphoneheaders IOHIDEvent.h）：allocator, timeStamp, index, identity,
+// eventMask, x, y, z, tipPressure, twist, range, touch, options = 13 参（勿多加 uint32）
+static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
 static void (*_AT_IOHIDEventAppendEvent)(IOHIDEventRef, IOHIDEventRef, uint32_t);
 // 注意：真实符号名是 ...Value 结尾（IOHIDEventSetInteger 这个符号不存在，dlsym 会返回 NULL）
 static void (*_AT_IOHIDEventSetIntegerValue)(IOHIDEventRef, uint32_t, int32_t);
 static void (*_AT_IOHIDEventSetFloatValue)(IOHIDEventRef, uint32_t, Float32);
-static IOHIDEventRef (*_AT_IOHIDEventCreateKeyboardEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, Boolean, uint32_t);
+static IOHIDEventRef (*_AT_IOHIDEventCreateKeyboardEvent)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
 
 static IOHIDEventSystemClientRef gHIDClient = nil;
 static BOOL gHIDReady = NO;
@@ -219,16 +221,19 @@ static void ATSimulateKey(BOOL down, int usage) {
 
 #pragma mark - Screen capture (CARenderServer + IOSurface, 全部 dlsym 绕开 SDK 头文件)
 
-typedef struct OpaqueCARenderServer *CARenderServerRef;
 typedef struct CF_BRIDGED_TYPE(id) __IOSurface *IOSurfaceRef;
-static CARenderServerRef (*_AT_CARenderServerCreateServer)(void);
-static IOSurfaceRef (*_AT_CARenderServerCaptureDisplay)(CARenderServerRef, uint32_t, CFDictionaryRef);
+// 真实签名（AutoTouch libATGraphic 反汇编 + ios-mcp 实证，BUILD_PLAN F46/F47）：
+// IOSurfaceRef CARenderServerCaptureDisplay(uint32_t serverPort=0, CFStringRef displayName, CFDictionaryRef options)
+// —— 首参 0 = 默认 server（不是 server 指针！），第二参显示屏名（iOS: "LCD"，备选 "Main"）
+static IOSurfaceRef (*_AT_CARenderServerCaptureDisplay)(uint32_t, CFStringRef, CFDictionaryRef);
 static size_t (*_AT_IOSurfaceGetWidth)(IOSurfaceRef);
 static size_t (*_AT_IOSurfaceGetHeight)(IOSurfaceRef);
 static size_t (*_AT_IOSurfaceGetBytesPerRow)(IOSurfaceRef);
 static uint32_t (*_AT_IOSurfaceGetPixelFormat)(IOSurfaceRef);
 static void * (*_AT_IOSurfaceGetBaseAddress)(IOSurfaceRef);
-static CARenderServerRef gRenderServer = nil;
+// 可选：读前加锁（经典截图模式，AutoTouch 同样 Lock/Unlock）；缺失时不阻塞
+static int32_t (*_AT_IOSurfaceLock)(IOSurfaceRef, uint32_t, uint32_t *);
+static void (*_AT_IOSurfaceUnlock)(IOSurfaceRef, uint32_t, uint32_t);
 static BOOL gCaptureReady = NO;
 
 static void ATLoadCaptureSymbols(void) {
@@ -236,22 +241,22 @@ static void ATLoadCaptureSymbols(void) {
     void *ios = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_NOW);
     if (!qc || !ios) { ATLog(@"QuartzCore/IOSurface dlopen failed: %s / %s",
                              qc ? "ok" : dlerror(), ios ? "ok" : dlerror()); return; }
-    _AT_CARenderServerCreateServer   = (typeof(_AT_CARenderServerCreateServer))dlsym(qc, "CARenderServerCreateServer");
     _AT_CARenderServerCaptureDisplay = (typeof(_AT_CARenderServerCaptureDisplay))dlsym(qc, "CARenderServerCaptureDisplay");
     _AT_IOSurfaceGetWidth            = (typeof(_AT_IOSurfaceGetWidth))dlsym(ios, "IOSurfaceGetWidth");
     _AT_IOSurfaceGetHeight           = (typeof(_AT_IOSurfaceGetHeight))dlsym(ios, "IOSurfaceGetHeight");
     _AT_IOSurfaceGetBytesPerRow      = (typeof(_AT_IOSurfaceGetBytesPerRow))dlsym(ios, "IOSurfaceGetBytesPerRow");
     _AT_IOSurfaceGetPixelFormat      = (typeof(_AT_IOSurfaceGetPixelFormat))dlsym(ios, "IOSurfaceGetPixelFormat");
     _AT_IOSurfaceGetBaseAddress      = (typeof(_AT_IOSurfaceGetBaseAddress))dlsym(ios, "IOSurfaceGetBaseAddress");
-    if (!_AT_CARenderServerCreateServer || !_AT_CARenderServerCaptureDisplay ||
+    _AT_IOSurfaceLock                = (typeof(_AT_IOSurfaceLock))dlsym(ios, "IOSurfaceLock");
+    _AT_IOSurfaceUnlock              = (typeof(_AT_IOSurfaceUnlock))dlsym(ios, "IOSurfaceUnlock");
+    if (!_AT_CARenderServerCaptureDisplay ||
         !_AT_IOSurfaceGetWidth || !_AT_IOSurfaceGetHeight || !_AT_IOSurfaceGetBytesPerRow ||
         !_AT_IOSurfaceGetPixelFormat || !_AT_IOSurfaceGetBaseAddress) {
         ATLog(@"CARenderServer/IOSurface symbols incomplete, capture disabled");
         return;
     }
-    gRenderServer = _AT_CARenderServerCreateServer();
-    gCaptureReady = (gRenderServer != nil);
-    ATLog(@"capture ready: %@", gCaptureReady ? @"YES" : @"NO");
+    gCaptureReady = YES;
+    ATLog(@"capture ready: YES (lock: %@)", _AT_IOSurfaceLock ? @"YES" : @"NO");
 }
 
 typedef struct { uint8_t *rgba; int w, h; } ATBitmap;
@@ -264,17 +269,27 @@ static void ATFreeBitmap(ATBitmap *b) {
 // 抓当前主屏，输出 RGBA8（仅 SpringBoard 进程可用）
 static BOOL ATCaptureScreen(ATBitmap *out) {
     if (!gCaptureReady) return NO;
-    IOSurfaceRef s = _AT_CARenderServerCaptureDisplay(gRenderServer, 0, NULL);
+    // port=0（默认 server）+ 显示屏名：iOS 上 "LCD" 优先，"Main" 回退（ios-mcp 同款策略）
+    IOSurfaceRef s = _AT_CARenderServerCaptureDisplay(0, CFSTR("LCD"), NULL);
+    if (!s) s = _AT_CARenderServerCaptureDisplay(0, CFSTR("Main"), NULL);
     if (!s) return NO;
+    uint32_t seed = 0;
+    if (_AT_IOSurfaceLock) _AT_IOSurfaceLock(s, 1 /*kIOSurfaceLockReadOnly*/, &seed);  // 读前加锁
     int w = (int)_AT_IOSurfaceGetWidth(s);
     int h = (int)_AT_IOSurfaceGetHeight(s);
     size_t pitch = _AT_IOSurfaceGetBytesPerRow(s);
     uint32_t fmt = _AT_IOSurfaceGetPixelFormat(s); // 'BGRA' 或 'ARGB'
     uint8_t *base = (uint8_t *)_AT_IOSurfaceGetBaseAddress(s);
-    if (w <= 0 || h <= 0) { CFRelease(s); return NO; }
+    if (w <= 0 || h <= 0 || !base) {
+        if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);
+        CFRelease(s); return NO;
+    }
     out->w = w; out->h = h;
     out->rgba = (uint8_t *)malloc((size_t)w * h * 4);
-    if (!out->rgba) { CFRelease(s); return NO; }
+    if (!out->rgba) {
+        if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);
+        CFRelease(s); return NO;
+    }
     int rIdx = (fmt == 'ARGB') ? 1 : 2;  // 输出统一 RGBA
     int bIdx = (fmt == 'ARGB') ? 3 : 0;
     for (int y = 0; y < h; y++) {
@@ -287,6 +302,7 @@ static BOOL ATCaptureScreen(ATBitmap *out) {
             dst[x*4+3] = src[x*4+3];
         }
     }
+    if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);  // 读毕解锁
     CFRelease(s);
     return YES;
 }
