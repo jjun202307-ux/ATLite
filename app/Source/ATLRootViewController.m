@@ -69,17 +69,17 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
 #pragma mark - Server
 
 - (NSString *)deviceIPAddress {
-    ifaddrs *ifs = NULL;
+    struct ifaddrs *ifs = NULL;
     NSMutableString *ip = [NSMutableString stringWithString:@"未获取到 IP"];
     if (getifaddrs(&ifs) == 0) {
-        for (ifaddrs *i = ifs; i; i = i->ifa_next) {
+        for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
             if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
             NSString *name = [NSString stringWithUTF8String:i->ifa_name];
             if ([name hasPrefix:@"en"]) {
                 char buf[INET_ADDRSTRLEN] = {0};
                 struct sockaddr_in *sa = (struct sockaddr_in *)i->ifa_addr;
                 inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf));
-                ip = [NSString stringWithUTF8String:buf];
+                ip = [NSMutableString stringWithUTF8String:buf];
                 break;
             }
         }

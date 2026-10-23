@@ -233,3 +233,27 @@ for (NSArray *pt in hits) {
 
 - [ ] C13：两处 import 已加；app 全部 4 个 .m 的 `@implementation` 类在编译单元内均有可见 `@interface`（import 链核查）
 - [ ] C14：全仓 grep 确认无其它 "用类但未导入头" 的情况
+
+---
+
+## 修订 5（run#14 结果 → 修订）
+
+### run#14 实际结果
+
+- ✅ main.m、ATLAppDelegate.m、ATLWebServer.m 编译通过（日志无其它错误）
+- ❌ `ATLRootViewController.m`：11 个错误，两个根因
+
+### 新增事实
+
+| # | 事实 | 证据 |
+|---|------|------|
+| F19 | Darwin 的 `ifaddrs.h` 只定义 `struct ifaddrs`，**没有 typedef**；`ifaddrs *i` 在 ObjC++ 中是"未声明标识符"并连锁报错。必须写 `struct ifaddrs *` | run#14 日志（75 行起连锁 use of undeclared identifier 'i'） |
+| F20 | `ip` 声明为 `NSMutableString*`，把 `[NSString stringWithUTF8String:]`（instancetype→NSString*）赋给它，在 -Werror 下是 `-Wincompatible-pointer-types` 硬错误；改用 `[NSMutableString stringWithUTF8String:]` | run#14 日志（82 行） |
+
+### 修订方案（4.7）
+
+`deviceIPAddress` 函数三处：`struct ifaddrs *ifs`、`for (struct ifaddrs *i = ...)`、`ip = [NSMutableString stringWithUTF8String:buf]`。
+
+### 修订后检查清单（增量）
+
+- [ ] C15：ATLWebServer.m（含 sockaddr 等 C 结构）在 run#14 已编译通过，无需改动；确认剩余流程为：链接 app → ldid 签名 → dpkg-deb 打包，无其它已知风险
