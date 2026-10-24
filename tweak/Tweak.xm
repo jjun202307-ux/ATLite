@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.5 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.6 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -134,6 +134,25 @@ static void ATLog(NSString *fmt, ...) {
             fclose(f);
         }
     } @catch (__unused id e) {}
+}
+
+// ---------------------------------------------------------------------------
+// 正在跑的脚本数 + 等待旧脚本退出（必须放在 ATLog 之后 —— C 先声明后使用，见 E27）
+// 用于"停止后立刻跑新脚本"的场景：若不等旧脚本退干净就重置停止信号，
+// 旧脚本会因为信号被清而**复活**（v0.3.6 debug 复查发现）。
+// ---------------------------------------------------------------------------
+static volatile int32_t gRunningScripts = 0;
+
+static void ATWaitForPreviousScripts(double maxSec) {
+    if (__sync_fetch_and_add(&gRunningScripts, 0) == 0) return;
+    gStopRequested = 1; // 让旧脚本停下
+    ATLog(@"previous script still running — requesting stop, waiting up to %.1fs", maxSec);
+    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + maxSec;
+    while (__sync_fetch_and_add(&gRunningScripts, 0) > 0 &&
+           CFAbsoluteTimeGetCurrent() < deadline) {
+        struct timespec ts = {0, 50 * 1000 * 1000}; // 50ms
+        nanosleep(&ts, NULL);
+    }
 }
 
 #pragma mark - Touch/key simulation (IOHIDEvent)
@@ -811,7 +830,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.5 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.6 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -964,13 +983,21 @@ static CFAbsoluteTime gScriptDeadline = 0.0;
 
 static void ATLuaTimeoutHook(lua_State *L, lua_Debug *ar) {
     (void)ar;
+    // ⚠ 复查发现（v0.3.6）：luaL_error 最终是 longjmp，绝不能发生在 @autoreleasepool 块内——
+    // 那会跳过 objc_autoreleasePoolPop，破坏 autorelease 栈（未定义行为，可崩溃）。
+    // 做法：在 pool 内只算标志，退出 pool 后再抛错。
+    BOOL shouldStop = NO, timedOut = NO;
     @autoreleasepool {
-        // E26：停止优先于超时判定
-        if (ATShouldStop()) luaL_error(L, "STOP");
-        if (gScriptDeadline > 0 && CFAbsoluteTimeGetCurrent() > gScriptDeadline) {
-            luaL_error(L, "ATLite: script exceeded %d s limit (aborted to protect SpringBoard)",
-                       (int)AT_SCRIPT_TIMEOUT_SEC);
+        shouldStop = ATShouldStop();
+        if (!shouldStop && gScriptDeadline > 0 &&
+            CFAbsoluteTimeGetCurrent() > gScriptDeadline) {
+            timedOut = YES;
         }
+    }
+    if (shouldStop) luaL_error(L, "STOP");
+    if (timedOut) {
+        luaL_error(L, "ATLite: script exceeded %d s limit (aborted to protect SpringBoard)",
+                   (int)AT_SCRIPT_TIMEOUT_SEC);
     }
 }
 
@@ -980,8 +1007,9 @@ static void ATPlayLuaFile(NSString *scriptPath) {
         ATLog(@"script not found: %@", scriptPath);
         return;
     }
-    // E26：新脚本开跑前清掉上一次的停止标志（否则会被上一轮的 flag 立刻停掉）
+    // E26：清掉上一次的停止标志（调用方已确保旧脚本退出，见 ATWaitForPreviousScripts）
     ATClearStopFlag();
+    __sync_fetch_and_add(&gRunningScripts, 1);
     ATWriteStatus(YES, scriptPath.lastPathComponent);
     lua_State *L = luaL_newstate();
     luaL_openlibs(L);
@@ -1022,6 +1050,7 @@ static void ATPlayLuaFile(NSString *scriptPath) {
         ATLog(@"script finished: %@", scriptPath.lastPathComponent);
     }
     gScriptDeadline = 0; // E25-B：本次执行结束，解除时限
+    __sync_fetch_and_sub(&gRunningScripts, 1);
     ATWriteStatus(NO, scriptPath.lastPathComponent); // E26：状态回到空闲
     lua_close(L);
 }
@@ -1060,6 +1089,9 @@ static void ATHandleCommand(void) {
         NSString *path = [ATScriptsDir() stringByAppendingPathComponent:n];
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             @autoreleasepool {
+                // 复查修复：等旧脚本先退干净，再重置停止信号开跑新脚本
+                // （否则 ATClearStopFlag 会把"正在停旧脚本"的信号一起清掉，旧脚本复活）
+                ATWaitForPreviousScripts(3.0);
                 // M2：用户脚本是不可信输入，运行链路任何异常都不许击穿到 SpringBoard
                 @try { ATPlayLuaFile(path); }
                 @catch (NSException *e) { ATLog(@"script exception: %@", e); }
@@ -1095,7 +1127,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.5 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.6 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

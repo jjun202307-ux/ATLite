@@ -116,6 +116,12 @@
 - **为什么静态断言没抓到**：断言只检查"源码里有没有这个字符串"，不检查**相对顺序**。
 - **修复**：停止相关定义整体前移到 Paths 段之后（先于所有使用者）；断言升级为**顺序守卫**（定义位置 < 首次使用位置）。
 - **R27：新增 C/ObjC 函数时，定义必须放在所有使用点之前；静态断言对"符号存在"类检查必须升级为"定义早于使用"的顺序检查——只查存在性抓不到 undeclared identifier。**
+- **复发（v0.3.6 debug 复查）**：新增 `ATWaitForPreviousScripts` 又被放在了 `ATLog` 声明之前，同一条规则第二次踩中。教训加固：**顺序检查必须对全部 static 函数自动扫描**（已并入 `verify_static.py` 的 R27 断言，覆盖 tweak + 所有 app 源文件），不能只盯上次出错的那几个符号。
+
+### E28. debug 复查发现的两个逻辑缺陷（v0.3.5 代码，未发版前修掉）
+- **缺陷 1（可崩溃）**：`ATLuaTimeoutHook` 在 `@autoreleasepool` 块内调用 `luaL_error`。`luaL_error` 最终是 **longjmp**，会跳过 `objc_autoreleasePoolPop`，破坏 autorelease 池栈——未定义行为，在 SpringBoard 里就是随机崩溃。修复：pool 内只计算标志，退出 pool 后再抛错。
+- **缺陷 2（旧脚本复活）**：`ATPlayLuaFile` 开头 `ATClearStopFlag()` 会同时把 `gStopRequested` 清零。于是"脚本卡住 → 点停止 → 立刻运行另一个脚本"时，停止信号被新脚本的启动流程清掉，**旧脚本继续跑**。修复：新增 `gRunningScripts` 原子计数 + `ATWaitForPreviousScripts(3s)`（在后台线程先下停止令，再等旧脚本退干净），确认退出后才重置信号。
+- **R28：停止/取消这类"控制信号"的生命周期必须绑定到被控对象，而不是被后续操作顺手重置——引入新任务前，先确认旧任务已退出。另：任何 longjmp 型错误抛出（luaL_error/exception 穿越）都不得发生在 @autoreleasepool 块内。**
 
 ## C. 构建期错误（CI 能抓到，但每条都浪费一轮构建）
 

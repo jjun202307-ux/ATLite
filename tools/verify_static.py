@@ -230,8 +230,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步 0.3.2
-    check("V 版本0.3.5三处同步",
-          "Version: 0.3.5" in ctrl and "<string>0.3.5</string>" in plist_raw and "v0.3.5" in tweak)
+    check("V 版本0.3.6三处同步",
+          "Version: 0.3.6" in ctrl and "<string>0.3.6</string>" in plist_raw and "v0.3.6" in tweak)
 
     # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
     logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")
@@ -273,16 +273,46 @@ def main(root):
     check("R26-E26 日志页有停止入口",
           "stopScript" in strip_comments(read(root, "app/Source/ATLLogViewController.m")))
 
-    # ---- R27/E27: C 先声明后使用 —— 定义顺序守卫（v0.3.5 构建失败实证）----
-    # 只检查"字符串存在"抓不到 undeclared identifier，必须检查定义早于使用
-    for sym in ["ATShouldStop", "ATStopFlagPath", "ATWriteStatus", "ATClearStopFlag"]:
-        defs = [i for i in range(len(tweak_code)) if tweak_code.startswith("static BOOL " + sym, i)
-                or tweak_code.startswith("static NSString *" + sym, i)
-                or tweak_code.startswith("static void " + sym, i)]
-        uses = [i for i in range(len(tweak_code)) if (sym + "(") in tweak_code[i:i + len(sym) + 1]]
-        first_use = min([i for i in uses if not tweak_code.startswith("static", max(0, i - 40))] or [-1])
-        ok = bool(defs) and (first_use == -1 or defs[0] < first_use)
-        check("R27-E27 %s 定义早于使用" % sym, ok)
+    # ---- R27/E27: C 先声明后使用 —— 全量定义顺序守卫（v0.3.5/0.3.6 两次构建失败实证）----
+    # 只检查"字符串存在"抓不到 undeclared identifier；必须对**所有** static 函数查顺序
+    def _static_order_violations(src):
+        lines = strip_comments(src).split("\n")
+        defs = {}
+        for i, l in enumerate(lines):
+            m = re.match(r"\s*static\s+[A-Za-z_][\w\s\*<>]*?\b([A-Za-z_]\w*)\s*\(", l)
+            if m:
+                defs.setdefault(m.group(1), i)
+        bad = []
+        for name, d in defs.items():
+            for i, l in enumerate(lines):
+                if i == d:
+                    continue
+                if (name + "(") in l and not l.lstrip().startswith("static"):
+                    if i < d:
+                        bad.append("%s(定义L%d<使用L%d)" % (name, d + 1, i + 1))
+                    break
+        return bad
+
+    for rel in ["tweak/Tweak.xm", "app/Source/ATLWebServer.m", "app/Source/ATLPaths.m",
+                "app/Source/ATLCommand.m"]:
+        v = _static_order_violations(read(root, rel))
+        check("R27-E27 %s 无定义晚于使用" % rel, not v, str(v))
+
+    # ---- 复查修复守卫（v0.3.5 debug 复查发现）----
+    # 1) luaL_error 是 longjmp，必须发生在 @autoreleasepool 之外，否则破坏 autorelease 栈
+    hook_src = tweak_code[tweak_code.find("ATLuaTimeoutHook"):]
+    hook_src = hook_src[:hook_src.find("\n}\n")] if "\n}\n" in hook_src else hook_src[:600]
+    pool_i = hook_src.find("@autoreleasepool")
+    err_i = hook_src.find("luaL_error")
+    check("复查-1 hook 内 luaL_error 在 autoreleasepool 之外",
+          pool_i != -1 and err_i != -1 and pool_i < err_i)
+    # 2) 停止后立刻跑新脚本，旧脚本不得因信号被清而复活
+    check("复查-2 旧脚本退出等待机制", "ATWaitForPreviousScripts" in tweak_code)
+    check("复查-2 运行计数原子增减",
+          "__sync_fetch_and_add(&gRunningScripts, 1)" in tweak_code and
+          "__sync_fetch_and_sub(&gRunningScripts, 1)" in tweak_code)
+    check("复查-2 等待在 dispatch 块内(非主线程)",
+          tweak_code.find("ATWaitForPreviousScripts(3.0)") < tweak_code.find("ATPlayLuaFile(path)"))
 
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)
