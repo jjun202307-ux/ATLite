@@ -1,6 +1,6 @@
 Package: me.atlite.ios
 Name: ATLite
-Version: 0.3.2
+Version: 0.3.3
 Architecture: iphoneos-arm64e
 Description: AutoTouch-style script automation for rootless jailbreaks: Lua 5.3 engine, IOHIDEvent touch simulation, PC script import over HTTP.
 Section: Utilities

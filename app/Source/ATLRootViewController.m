@@ -1,48 +1,10 @@
 #import <UIKit/UIKit.h>
 #import "ATLRootViewController.h"
 #import "ATLWebServer.h"
+#import "ATLPaths.h"
+#import "ATLLogViewController.h"
 #import <ifaddrs.h>
 #import <arpa/inet.h>
-
-// jbroot 推导（RESEARCH D1 的 App 侧落实）：
-// 自身安装于 <jbroot>/Applications/ATLite.app —— 以 mainBundle.bundlePath 去后缀推导
-// （与安装路径天然一致，不依赖探测），探测仅作回退。结果缓存，与 tweak 侧同模式。
-static NSString *ATLJBRoot(void) {
-    static NSString *root = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        NSString *bp = [NSBundle mainBundle].bundlePath;
-        NSRange r = [bp rangeOfString:@"/Applications/ATLite.app" options:NSBackwardsSearch];
-        if (r.location != NSNotFound && r.location > 0) {
-            root = [bp substringToIndex:r.location];
-            return;
-        }
-        // 回退：探测（未知安装方式下的兜底）
-        // Dopamine-roothide 实证（DOBootstrapper.m）：/var/jb 是指向 jbroot 的 symlink；
-        // jbroot 真实位置 /var/containers/Bundle/Application/.jbroot-<16hex>
-        NSFileManager *fm = [NSFileManager defaultManager];
-        if ([fm fileExistsAtPath:@"/var/jb"]) { root = @"/var/jb"; return; }
-        for (NSString *n in [fm contentsOfDirectoryAtPath:@"/var/containers/Bundle/Application" error:nil]) {
-            if ([n hasPrefix:@".jbroot-"]) {
-                root = [@"/var/containers/Bundle/Application" stringByAppendingPathComponent:n];
-                return;
-            }
-        }
-        root = @"/var/jb"; // fallback
-    });
-    return root;
-}
-static NSString *ATLBaseDir(void) {
-    return [ATLJBRoot() stringByAppendingString:@"/var/mobile/Library/ATLite"];
-}
-static NSString *ATLScriptsDir(void) {
-    return [ATLBaseDir() stringByAppendingPathComponent:@"Scripts"];
-}
-static NSString *ATLCommandPath(void) {
-    return [ATLBaseDir() stringByAppendingPathComponent:@"command.json"];
-}
-
-static NSString * const ATLDarwinNotify = @"me.atlite.command";
 
 @interface ATLRootViewController ()
 @property (nonatomic, strong) UILabel *statusLabel;
@@ -66,9 +28,13 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
     self.statusLabel.textColor = [UIColor darkGrayColor];
     self.tableView.tableHeaderView = self.statusLabel;
 
+    // E24：日志入口常驻导航栏，脚本"没反应"时一键查看 tweak 日志
     UIBarButtonItem *refresh = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
                                                                              target:self action:@selector(refresh)];
-    self.navigationItem.rightBarButtonItem = refresh;
+    UIBarButtonItem *log = [[UIBarButtonItem alloc] initWithTitle:@"日志"
+                                                            style:UIBarButtonItemStylePlain
+                                                           target:self action:@selector(openLog)];
+    self.navigationItem.rightBarButtonItems = @[log, refresh];
 
     // 启动期任何异常都不允许杀死 App（v0.1.0 "打不开"的教训：启动链路必须防御）
     @try {
@@ -140,12 +106,18 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
     NSData *data = [NSJSONSerialization dataWithJSONObject:cmd options:0 error:nil];
     [data writeToFile:ATLCommandPath() atomically:YES];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-                                         (__bridge CFStringRef)ATLDarwinNotify, NULL, NULL, YES);
+                                         (__bridge CFStringRef)ATLDarwinNotifyName, NULL, NULL, YES);
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已发送运行命令"
                                                                   message:name
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+#pragma mark - Log (E24)
+
+- (void)openLog {
+    [self.navigationController pushViewController:[[ATLLogViewController alloc] init] animated:YES];
 }
 
 #pragma mark - Data
@@ -183,6 +155,10 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
                                                            preferredStyle:UIAlertControllerStyleActionSheet];
     [sheet addAction:[UIAlertAction actionWithTitle:@"▶ 运行" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         [self runScript:name];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"▶ 运行并查看日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        [self runScript:name];
+        [self openLog];
     }]];
     [sheet addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
         [[NSFileManager defaultManager] removeItemAtPath:[ATLScriptsDir() stringByAppendingPathComponent:name] error:nil];

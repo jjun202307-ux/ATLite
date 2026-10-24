@@ -25,7 +25,11 @@ def check(rule, ok, detail=""):
 
 
 def read(root, rel):
-    with open(os.path.join(root, rel), "rb") as f:
+    # 文件缺失返回空串而非抛异常：本工具要能跑在"旧版快照"上做 RED 实测
+    p = os.path.join(root, rel)
+    if not os.path.isfile(p):
+        return ""
+    with open(p, "rb") as f:
         return f.read().decode("utf8", "replace")
 
 
@@ -131,10 +135,14 @@ def main(root):
         check("R22-E22 postinst 用 vroot 路径",
               "/Applications/ATLite.app" in pi and "/rootfs/" not in pi)
     # jbroot 探测路径必须是实证位置（Dopamine-roothide DOBootstrapper.m）
+    # 注意：App 侧路径逻辑住在 ATLPaths.m（v0.3.3 抽出共享模块），
+    # 但断言应判定"App 侧整体"，不钉死单个文件名——否则文件一移动就假红
+    app_paths = strip_comments(read(root, "app/Source/ATLPaths.m")) + \
+                strip_comments(read(root, "app/Source/ATLRootViewController.m"))
     check("R22-E22 tweak 探测实证 jbroot 位置",
           "/var/containers/Bundle/Application" in tweak_code)
     check("R22-E22 app 探测实证 jbroot 位置",
-          "/var/containers/Bundle/Application" in strip_comments(read(root, "app/Source/ATLRootViewController.m")))
+          "/var/containers/Bundle/Application" in app_paths)
 
     # ---- R8/E8: filter plist 命名 == TWEAK_NAME ----
     check("R8-E8 ATLiteTweak.plist 在位",
@@ -196,7 +204,7 @@ def main(root):
     check("I6 tweak 侧 dladdr 推导 jbroot", "dladdr" in tweak_code)
     vc_code = strip_comments(vc)
     check("I6 app 侧 bundlePath 推导 jbroot",
-          "mainBundle].bundlePath" in vc_code and "/Applications/ATLite.app" in vc_code)
+          "mainBundle].bundlePath" in app_paths and "/Applications/ATLite.app" in app_paths)
 
     # C1/E21: dispatch_once block 内禁止 ATLog（ATLog→ATLogsDir→ATBaseDir→ATJBRoot 重入死锁）
     m_once = re.search(r"ATJBRoot\(void\)\s*\{(.*?)\n\}\n", tweak, flags=re.S)
@@ -222,8 +230,24 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步 0.3.2
-    check("V 版本0.3.2三处同步",
-          "Version: 0.3.2" in ctrl and "<string>0.3.2</string>" in plist_raw and "v0.3.2" in tweak)
+    check("V 版本0.3.3三处同步",
+          "Version: 0.3.3" in ctrl and "<string>0.3.3</string>" in plist_raw and "v0.3.3" in tweak)
+
+    # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
+    logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")
+    check("R24-E24 日志页存在", os.path.isfile(logvc_path))
+    if os.path.isfile(logvc_path):
+        logvc = strip_comments(read(root, "app/Source/ATLLogViewController.m"))
+        check("R24-E24 日志多路径探测(容忍jbroot差异)", "ATLExistingLogPath" in logvc)
+        check("R24-E24 找不到日志时输出诊断", "诊断" in read(root, "app/Source/ATLLogViewController.m"))
+        check("R24-E24 自动刷新便于看实时输出", "scheduledTimerWithTimeInterval" in logvc)
+    check("R24-E24 导航栏有日志入口", "openLog" in vc_code and "ATLLogViewController alloc" in vc_code)
+    check("R24-E24 路径模块已抽出共享", os.path.isfile(os.path.join(root, "app/Source/ATLPaths.m")))
+    # 通用守卫：app/Source 下新增 .m 必须登记进 ATLite_FILES，否则链接期符号缺失
+    import glob as _glob
+    srcs = [os.path.basename(p) for p in _glob.glob(os.path.join(root, "app/Source", "*.m"))]
+    missing_src = [s for s in srcs if ("Source/" + s) not in app_mk]
+    check("R24 Makefile FILES 覆盖全部 Source/*.m", not missing_src, "漏登记%s" % missing_src)
 
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)

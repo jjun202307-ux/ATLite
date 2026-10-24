@@ -75,6 +75,16 @@
 - **修复**：AppDelegate 包 `UINavigationController`；删自建 table（直接用 `self.tableView`），`statusLabel` 改为 `tableHeaderView`（永不被遮挡、随表格滚动）。
 - **R23：UI 状态行必须用 tableHeaderView / 导航栏这类有主的位置承载；禁止在 UITableViewController 的 self.view 上再叠自建 table；涉及可见性的改动必须脑内渲染一遍 z-order 与视图层级。**
 
+### E24. App 内无法查看 tweak 日志 → 脚本"没反应"时没有调试手段
+- **现象**：用户运行脚本后无任何反馈，唯一线索 tweak.log 要自己用 Filza 摸到 `<jbroot>/var/mobile/Library/ATLite/logs/` 才能看，而 jbroot 是随机路径——等于没有调试通道。
+- **根因**：App 只做了"发命令"，没做"看结果"。诊断信息全在 tweak 侧日志里，App 侧零可见性。
+- **修复**：新增 `ATLLogViewController`（导航栏"日志"入口 + 操作表"运行并查看日志"）：
+  1. 显示 tweak.log，1.5 秒自动刷新（运行脚本时可看实时输出）
+  2. **多路径探测**（`ATLExistingLogPath`）：App 侧 jbroot 推导（bundlePath）与 tweak 侧（dladdr）可能不同，逐个候选试，避免"文件其实在、只是路径字符串不同"
+  3. 找不到日志时输出**诊断文本**（jbroot 推导值 + 各候选路径 + logs 目录是否存在），直接区分三种情况：全部不存在＝tweak 未注入；目录存在无文件＝注入了没写日志；只有载入行无 command 行＝命令没送达
+  4. 路径逻辑抽出为 `ATLPaths.h/.m` 共享模块（App 与日志页共用）
+- **R24：任何"发起方—执行方"分离的架构，发起方必须内置查看执行方输出的通道；且该通道要能自我诊断（说清是没启动、没送达还是没产出），不能只显示空白。** 另：app/Source 新增 .m 必须同步登记 `ATLite_FILES`（已加通用守卫断言防漏）。
+
 ## C. 构建期错误（CI 能抓到，但每条都浪费一轮构建）
 
 ### E10. 假设 lua/lua 仓库是 tarball 的 src/ 布局
