@@ -129,6 +129,14 @@
 - **修复**：抓屏改为调用方自建 IOSurface + RenderDisplay（`ATRenderIntoNewSurface`），屏幕物理像素经 `ATScreenPixelSize()` 惰性缓存（UIScreen 只能主线程碰，dispatch_sync 主线程取一次）；E25 看门狗保留降级为保险丝。日志改 `capture ready: YES (RenderDisplay, ...)` 以便真机区分新旧版。
 - **R29：私有/ undocumented API 的选型必须有"参考实现在用"的实证（成熟同类产品的导入符号表是最强证据）；零文档接口即使调得通，也只配当最后手段，且必须有看门狗级兜底。新增断言组 R29（含"旧 API 字样完全消失"负向断言），RED 实测 9/9。**
 
+### E30. 尺寸获取绕过看门狗原则（v0.3.7 代码，ym-systematic-debugging 复查发现，未发版前修掉）
+- **缺陷 1（可永久卡死）**：`ATScreenPixelSize` 用无超时的 `dispatch_sync(dispatch_get_main_queue(), ...)` 取屏幕尺寸。主线程一旦卡死（E25 同场景镜像），脚本线程**在渲染之前**就永久堵死——E25 看门狗管不到它；Lua 60s 钩子是指令计数型，线程堵在 C 层时永不触发；E26 强停同样失效。跨线程等待无超时 = 防线出现缺口。
+- **缺陷 2（旋转后失效）**：`static CGSize px` 一次性缓存，设备旋转后 bounds 宽高互换，缓存尺寸过期，自建 surface 尺寸错误，搜图坐标全错。
+- **修复**：去缓存（每次抓屏重新取）+ semaphore 限时 1.5s 等待（与看门狗同构），超时返回零尺寸——抓屏失败、脚本拿 nil，线程绝不滞留。
+- **R30：凡"跨线程同步等待"一律套用看门狗原则（semaphore + 超时 + 失败可降级），无一例外——复查时把每个 dispatch_sync/semaphore_wait 单独过一遍。断言组 R30（RED 实测 2 条失败确认后修复）。**
+
+
+
 
 
 ## C. 构建期错误（CI 能抓到，但每条都浪费一轮构建）

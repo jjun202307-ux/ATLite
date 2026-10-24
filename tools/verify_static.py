@@ -87,6 +87,19 @@ def main(root):
     check("R29-E29 RenderDisplay 返回值检查", "kr != 0" in tweak)
     check("R3-E3 无CreateServer残留", "CreateServer" not in tweak)
 
+    # ---- R30/E30: 屏幕尺寸获取不得绕过看门狗原则（v0.3.7 复查 H1/H2）----
+    # H1: dispatch_sync 主线程无超时 → 主线程卡死时脚本线程在渲染前就永久卡死，
+    #     Lua 指令计数钩子/强停全部失效（线程堵在 C 层，钩子不触发）。
+    # H2: 一次性 static 缓存 → 旋转后尺寸过期，搜图坐标全错。
+    m30 = re.search(r'static CGSize ATScreenPixelSize\(void\) \{(.*?)\n\}', tweak_code, re.S)
+    body30 = m30.group(1) if m30 else ""
+    check("R30-E30 尺寸函数存在", bool(m30))
+    check("R30-E30 尺寸获取带超时等待(与看门狗同构)",
+          "dispatch_semaphore_wait" in body30 and "dispatch_time" in body30)
+    check("R30-E30 尺寸无一次性缓存(旋转安全)", "static CGSize" not in body30)
+    check("R30-E30 超时失败返回零尺寸(抓屏失败但不卡死)",
+          "CGSizeZero" in body30 or "{0, 0}" in body30)
+
     # ---- R12/E12 + R13/E13: loslib 桩在 CI；精确警告豁免在 Makefile ----
     wf = read(root, ".github/workflows/build.yml")
     check("R12-E12 loslib system() 桩补丁在CI",
@@ -243,8 +256,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.7三处同步",
-          "Version: 0.3.7" in ctrl and "<string>0.3.7</string>" in plist_raw and "v0.3.7" in tweak)
+    check("V 版本0.3.8三处同步",
+          "Version: 0.3.8" in ctrl and "<string>0.3.8</string>" in plist_raw and "v0.3.8" in tweak)
 
     # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
     logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")

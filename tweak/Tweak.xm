@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.7 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.8 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -370,19 +370,33 @@ static void ATLoadCaptureSymbols(void) {
     ATLog(@"capture ready: YES (RenderDisplay, lock: %@)", _AT_IOSurfaceLock ? @"YES" : @"NO");
 }
 
-// E29：自建 IOSurface 需要物理像素尺寸。惰性缓存（只取一次）：
-// UIScreen 只能主线程碰 —— 脚本线程首次抓屏时同步派发到主线程取值。
-// 只发生一次（此后走缓存），且此刻渲染队列上没有任何遗留 block，不会构成死锁环。
+// E30（v0.3.7 复查 H1/H2）：自建 IOSurface 需要物理像素尺寸，但取法有两条铁律——
+// ① 不得一次性缓存：设备旋转后 bounds 宽高互换，缓存过期会让搜图坐标全错（H2）。
+//    故每次抓屏都重新取。
+// ② 跨线程等待必须带超时（E25 同原则）：UIScreen 只能主线程碰，若主线程卡死，
+//    无超时的 dispatch_sync 会让脚本线程在渲染之前就永久卡死——Lua 指令计数钩子
+//    和强停在线程堵于 C 层时都不触发（H1）。故用 semaphore 限时等待，超时返回
+//    零尺寸：抓屏失败、脚本拿到 nil，但线程绝不滞留。
+#define AT_SCREEN_SIZE_TIMEOUT_SEC 1.5
 static CGSize ATScreenPixelSize(void) {
-    static CGSize px = {0, 0};
-    if (px.width > 0) return px;
     CGSize (^measure)(void) = ^{
         UIScreen *s = UIScreen.mainScreen;
         return CGSizeMake(s.bounds.size.width * s.nativeScale,
                           s.bounds.size.height * s.nativeScale);
     };
-    if ([NSThread isMainThread]) px = measure();
-    else dispatch_sync(dispatch_get_main_queue(), ^{ px = measure(); });
+    if ([NSThread isMainThread]) return measure();
+    __block CGSize px = {0, 0};
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        px = measure();
+        dispatch_semaphore_signal(sem);
+    });
+    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW,
+            (int64_t)(AT_SCREEN_SIZE_TIMEOUT_SEC * NSEC_PER_SEC))) != 0) {
+        ATLog(@"main thread unresponsive >%.1fs — screen size unavailable this frame",
+              AT_SCREEN_SIZE_TIMEOUT_SEC);
+        return CGSizeMake(0, 0);
+    }
     return px;
 }
 
@@ -891,7 +905,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.7 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.8 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1188,7 +1202,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.7 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.8 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }
