@@ -44,8 +44,7 @@ static NSString *ATLCommandPath(void) {
 
 static NSString * const ATLDarwinNotify = @"me.atlite.command";
 
-@interface ATLRootViewController () <UITableViewDataSource, UITableViewDelegate>
-@property (nonatomic, strong) UITableView *table;
+@interface ATLRootViewController ()
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) ATLWebServer *server;
 @property (nonatomic, strong) NSMutableArray<NSString *> *scripts;
@@ -58,17 +57,14 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
     self.title = @"ATLite";
     self.scripts = [NSMutableArray array];
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    // E23：IP 状态行作为 tableHeaderView。此前 self.view（UITableViewController 自带 tableView）
+    // 上又 addSubview 了自建 table，把先加的 statusLabel 整个盖住（z-order 遮挡），IP 不可见。
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 0, 56)];
     self.statusLabel.numberOfLines = 0;
     self.statusLabel.font = [UIFont systemFontOfSize:12];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
-    [self.view addSubview:self.statusLabel];
-
-    self.table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
-    self.table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.table.dataSource = self;
-    self.table.delegate = self;
-    [self.view addSubview:self.table];
+    self.statusLabel.textColor = [UIColor darkGrayColor];
+    self.tableView.tableHeaderView = self.statusLabel;
 
     UIBarButtonItem *refresh = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
                                                                              target:self action:@selector(refresh)];
@@ -82,13 +78,6 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
         self.statusLabel.text = [NSString stringWithFormat:@"启动异常: %@", e];
     }
     [self refresh];
-}
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    CGFloat top = self.view.safeAreaInsets.top + 8;
-    self.statusLabel.frame = CGRectMake(8, top, self.view.bounds.size.width - 16, 40);
-    self.table.contentInset = UIEdgeInsetsMake(48, 0, 0, 0);
 }
 
 #pragma mark - Bundled scripts (R9/E9)
@@ -169,7 +158,7 @@ static NSString * const ATLDarwinNotify = @"me.atlite.command";
         if ([ext isEqualToString:@"at"] || [ext isEqualToString:@"lua"]) [self.scripts addObject:f];
     }
     [self.scripts sortUsingSelector:@selector(compare:)];
-    [self.table reloadData];
+    [self.tableView reloadData];
 }
 
 #pragma mark - Table

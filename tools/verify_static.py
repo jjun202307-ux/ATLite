@@ -214,9 +214,16 @@ def main(root):
     # Minor1: 仅支持 iPhone，无 CFBundleIcons~ipad 段
     check("Minor1 无 CFBundleIcons~ipad", "CFBundleIcons~ipad" not in plist_raw)
 
-    # V: 版本三处同步 0.3.0
-    check("V 版本0.3.1三处同步",
-          "Version: 0.3.1" in ctrl and "<string>0.3.1</string>" in plist_raw and "v0.3.1" in tweak)
+    # ---- R23/E23: IP 状态行与导航栏不可见（真机截图实证）----
+    appd = read(root, "app/Source/ATLAppDelegate.m")
+    check("R23-E23 AppDelegate 包 UINavigationController",
+          "UINavigationController" in appd and "initWithRootViewController" in appd)
+    check("R23-E23 IP状态行作tableHeaderView（不被遮挡）", "tableHeaderView" in vc_code)
+    check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
+
+    # V: 版本三处同步 0.3.2
+    check("V 版本0.3.2三处同步",
+          "Version: 0.3.2" in ctrl and "<string>0.3.2</string>" in plist_raw and "v0.3.2" in tweak)
 
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)

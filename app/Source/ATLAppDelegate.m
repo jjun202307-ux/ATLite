@@ -7,7 +7,9 @@
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     CGRect bounds = [UIScreen mainScreen].bounds;
     self.window = [[UIWindow alloc] initWithFrame:bounds];
-    self.window.rootViewController = [[ATLRootViewController alloc] initWithStyle:UITableViewStylePlain];
+    ATLRootViewController *vc = [[ATLRootViewController alloc] initWithStyle:UITableViewStylePlain];
+    // E23：必须包 UINavigationController，否则 self.title 与 navigationItem 上的刷新按钮无处渲染
+    self.window.rootViewController = [[UINavigationController alloc] initWithRootViewController:vc];
     [self.window makeKeyAndVisible];
     return YES;
 }

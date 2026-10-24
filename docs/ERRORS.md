@@ -67,6 +67,14 @@
 - 同类附带修正：jbroot 探测的 `/var/mobile/.jbroot-*` 无证据支持，实证位置是 `/var/containers/Bundle/Application/.jbroot-*`（DOBootstrapper.m find_jbroot）。
 - **二次核验（2026-10-24，debug-error-recovery + pc-debugging-expert）**：样本量从 n=1 提升到 n=8（官方源 8 个不同 Section 的 arm64e 包），顶层目录全部为 `Library 152 / Applications 7`，`rootfs` 仅出现在 v0.3.0；`DOBootstrapper.m` L410 还会**主动删除** `/var/jb`（"Remove /var/jb as it might be wrong"），坐实该 symlink 是 Dopamine-roothide 自有行为而非 roothide 通用保证。RED 实测：用 v0.3.1 断言跑 v0.3.0 快照 → 55 PASS / 6 FAIL，R22 五条全部变红，证明断言有效。完整报告见 `docs/AUDIT_ROOTHIDE_E22.md`，取证工具见 `tools/verify_roothide_layout.py`。
 
+### E23. App 界面无标题栏、IP 状态行不可见（真机截图实证）
+- **现象**：v0.3.1 真机打开后，界面无导航栏（标题"ATLite"与刷新按钮不渲染），IP 状态行（`电脑访问: http://<ip>:8080`）看不见。
+- **根因（两 bug 叠加）**：
+  1. `ATLAppDelegate` 把 `ATLRootViewController` 直接设为 `window.rootViewController`，没包 `UINavigationController` → `self.title` / `navigationItem` 无处渲染。
+  2. `ATLRootViewController` 本身是 `UITableViewController`（`self.view` 天生已是 tableView），`viewDidLoad` 又新建了一个 `UITableView` addSubview 盖上去——后添加者在上层，把先加的 `statusLabel`（IP 行）**完全遮挡**（z-order 问题）；`contentInset.top=48` 只是表格内部留白，底下被盖的 label 依然不可见。
+- **修复**：AppDelegate 包 `UINavigationController`；删自建 table（直接用 `self.tableView`），`statusLabel` 改为 `tableHeaderView`（永不被遮挡、随表格滚动）。
+- **R23：UI 状态行必须用 tableHeaderView / 导航栏这类有主的位置承载；禁止在 UITableViewController 的 self.view 上再叠自建 table；涉及可见性的改动必须脑内渲染一遍 z-order 与视图层级。**
+
 ## C. 构建期错误（CI 能抓到，但每条都浪费一轮构建）
 
 ### E10. 假设 lua/lua 仓库是 tarball 的 src/ 布局
