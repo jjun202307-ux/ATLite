@@ -18,11 +18,13 @@ static NSString *ATLJBRoot(void) {
             return;
         }
         // 回退：探测（未知安装方式下的兜底）
+        // Dopamine-roothide 实证（DOBootstrapper.m）：/var/jb 是指向 jbroot 的 symlink；
+        // jbroot 真实位置 /var/containers/Bundle/Application/.jbroot-<16hex>
         NSFileManager *fm = [NSFileManager defaultManager];
         if ([fm fileExistsAtPath:@"/var/jb"]) { root = @"/var/jb"; return; }
-        for (NSString *n in [fm contentsOfDirectoryAtPath:@"/var/mobile" error:nil]) {
+        for (NSString *n in [fm contentsOfDirectoryAtPath:@"/var/containers/Bundle/Application" error:nil]) {
             if ([n hasPrefix:@".jbroot-"]) {
-                root = [@"/var/mobile/" stringByAppendingString:n];
+                root = [@"/var/containers/Bundle/Application" stringByAppendingPathComponent:n];
                 return;
             }
         }

@@ -1,4 +1,6 @@
 #!/bin/sh
-# roothide: 注册 ATLite App 图标(uicache)。失败不得阻塞安装。
-uicache -p /rootfs/var/jb/Applications/ATLite.app 2>/dev/null || uicache -a 2>/dev/null || true
+# roothide: postinst 运行在 vroot 环境（jbroot 为根），App 的 vroot 路径是 /Applications/ATLite.app
+# （实证：官方 com.roothide.patcher 的 postinst 用 /Applications/Patcher.app）。
+# 注册 App 图标(uicache)。失败不得阻塞安装。
+uicache -p /Applications/ATLite.app 2>/dev/null || uicache -a 2>/dev/null || true
 exit 0

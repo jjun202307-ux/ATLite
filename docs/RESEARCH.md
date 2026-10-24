@@ -11,7 +11,10 @@
 | A2 | 越狱 App 需要 entitlements 才能在 Dopamine/roothide 上启动并访问 /var/jb 文件系统：`platform-application` + `com.apple.private.security.no-sandbox` + `com.apple.private.security.storage.AppBundles` + `com.apple.private.security.storage.AppDataContainers`（四个全 true） | ★★★ AutoTouch 二进制内嵌签名块逐字提取；★ JBDev 项目全部 App 标配 platform-application |
 | A3 | Theos 默认 `TARGET_CODESIGN_FLAGS = -S`（裸假签）；实例级覆写 `XXX_CODESIGN_FLAGS` 生效于 `makefiles/instance/rules.mk` L215 | ★★ theos 源码 |
 | A4 | Theos 把 `Resources/` 目录内容 rsync 进 .app 根目录；Info.plist 不替换任何 `$(VAR)` 占位符 | ★★ theos bundle.mk 源码 + v0.1.0 实机解包验证 |
-| A5 | roothide 布局：`/rootfs/var/jb/Applications/*.app`；注册图标靠 postinst `uicache`；包架构 `iphoneos-arm64e` | ★ JBDev 文档；★★★ v0.2.0 产物解包验证 |
+| A5 | roothide 包布局 = **rootful 式无前缀**：data.tar 内路径为 `./Applications/X.app`、`./Library/MobileSubstrate/DynamicLibraries/`。roothide 的 dpkg 在 vroot 环境运行（jbroot 为根），自动把文件装进随机 jbroot。包架构 `iphoneos-arm64e`（与 CPU 无关，纯环境标识） | ★★★ 官方 com.roothide.patcher deb 拆解（路径无前缀）；★★ theapplewiki RootHide 条目；★★ roothide/theos vendor/mod/roothide 模块源码（package.mk 为空，仅 package/deb.mk 强制 arch） |
+| A6 | roothide maintainer scripts 用 **vroot 路径**（jbroot 为根的视角）：App 路径写 `/Applications/X.app`，不写 jbroot 真实路径；postinst 里 `uicache` 直接在 PATH | ★★★ 官方 com.roothide.patcher 的 postinst 原文 |
+| A7 | Dopamine-roothide 2.x 实证：jbroot = `/var/containers/Bundle/Application/.jbroot-<16位hex带校验>`；且创建 `/var/jb` → jbroot 的符号链接 | ★★ Dopamine-roothide 源码 DOBootstrapper.m（L481 createSymlinkAtPath:@"/var/jb"、L766 JB_ROOT_PREFIX、find_jbroot 扫描 /var/containers/Bundle/Application） |
+| A8 | 注册图标靠 postinst `uicache`（A6 的 vroot 路径）；Theos roothide 库的 install_name 用 `@loader_path/.jbroot/...`（我们 tweak 无越狱库外部依赖，Lua 静态编译，不涉及） | ★★ roothide theos instance/library.mk 源码 |
 
 ## B. IOHIDEvent 触摸/按键合成（以 AutoTouch 二进制为最高证据）
 

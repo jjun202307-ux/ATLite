@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.0 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.1 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -64,11 +64,13 @@ static NSString *ATJBRoot(void) {
             }
         }
         NSFileManager *fm = [NSFileManager defaultManager];
+        // Dopamine-roothide 实证（DOBootstrapper.m）：/var/jb 是指向 jbroot 的 symlink；
+        // jbroot 真实位置 /var/containers/Bundle/Application/.jbroot-<16hex>
         if ([fm fileExistsAtPath:@"/var/jb"]) { root = @"/var/jb"; gJBRootSource = @"probe:/var/jb"; return; }
-        NSArray *cands = [fm contentsOfDirectoryAtPath:@"/var/mobile" error:nil];
+        NSArray *cands = [fm contentsOfDirectoryAtPath:@"/var/containers/Bundle/Application" error:nil];
         for (NSString *n in cands) {
             if ([n hasPrefix:@".jbroot-"]) {
-                root = [@"/var/mobile/" stringByAppendingString:n];
+                root = [@"/var/containers/Bundle/Application" stringByAppendingPathComponent:n];
                 gJBRootSource = @"probe:.jbroot";
                 return;
             }
@@ -706,7 +708,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.0 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.1 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -939,7 +941,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.0 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.1 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

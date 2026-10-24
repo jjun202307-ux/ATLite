@@ -40,15 +40,18 @@ jobs:
 
       # Theos 官方无 roothide scheme 模块(vendor/mod 仅有 rootless, 其 deb.mk 强制
       # THEOS_PACKAGE_ARCH := iphoneos-arm64, 不匹配 roothide 设备的 iphoneos-arm64e)。
-      # 自制 roothide 模块: 布局前缀 /rootfs/var/jb + Architecture iphoneos-arm64e。
-      # 结构仿 rootless 模块(package.mk 设前缀 + package/deb.mk 设 ARCH),
+      # 自制 roothide 模块, 严格对齐官方 roothide/theos 的 vendor/mod/roothide:
+      #   package.mk 为空(不设前缀! roothide 包是 rootful 式无前缀布局,
+      #   roothide dpkg 在 vroot 环境运行, jbroot 为根, 自动装进随机 jbroot;
+      #   实证: 官方 com.roothide.patcher deb 内路径为 ./Applications/Patcher.app),
+      #   package/deb.mk 强制 Architecture=iphoneos-arm64e。
       # _THEOS_SCHEME_STAGE 由 common.mk 自动推导, 无需 instance/rules.mk。
-      # 详见 docs/BUILD_PLAN.md F24-F27
+      # 详见 docs/RESEARCH.md A5/A6、docs/ERRORS.md E22
       - name: Setup roothide scheme module
         run: |
           set -ux
           mkdir -p "$THEOS/vendor/mod/roothide/package"
-          printf 'THEOS_PACKAGE_INSTALL_PREFIX = /rootfs/var/jb\n' > "$THEOS/vendor/mod/roothide/package.mk"
+          : > "$THEOS/vendor/mod/roothide/package.mk"
           printf 'ifneq ($(THEOS_PACKAGE_ARCH),iphoneos-arm64e)\nTHEOS_PACKAGE_ARCH := iphoneos-arm64e\nendif\n' > "$THEOS/vendor/mod/roothide/package/deb.mk"
           # 注意: 主仓库 $THEOS/lib/iphone/rootless 是空壳, 真正的库在
           # $THEOS/vendor/lib/iphone/rootless (recursive clone 的子模块, run#20 日志证实)

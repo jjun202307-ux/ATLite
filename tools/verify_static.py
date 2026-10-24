@@ -123,6 +123,19 @@ def main(root):
     check("R19-E19 CI 存在性断言", "test -f" in wf)
     check("R20-E20 CI 断言 libroot_oldabi", "libroot_oldabi.a" in wf)
 
+    # ---- R22/E22: roothide 包无前缀（官方实证布局），postinst 用 vroot 路径 ----
+    check("R22-E22 CI 无 /rootfs/var/jb 前缀", "/rootfs/var/jb" not in wf)
+    check("R22-E22 roothide package.mk 置空", ': > "$THEOS/vendor/mod/roothide/package.mk"' in wf)
+    if os.path.isfile(os.path.join(root, "layout/DEBIAN/postinst")):
+        pi = read(root, "layout/DEBIAN/postinst")
+        check("R22-E22 postinst 用 vroot 路径",
+              "/Applications/ATLite.app" in pi and "/rootfs/" not in pi)
+    # jbroot 探测路径必须是实证位置（Dopamine-roothide DOBootstrapper.m）
+    check("R22-E22 tweak 探测实证 jbroot 位置",
+          "/var/containers/Bundle/Application" in tweak_code)
+    check("R22-E22 app 探测实证 jbroot 位置",
+          "/var/containers/Bundle/Application" in strip_comments(read(root, "app/Source/ATLRootViewController.m")))
+
     # ---- R8/E8: filter plist 命名 == TWEAK_NAME ----
     check("R8-E8 ATLiteTweak.plist 在位",
           os.path.isfile(os.path.join(root, "tweak/ATLiteTweak.plist")))
@@ -202,8 +215,8 @@ def main(root):
     check("Minor1 无 CFBundleIcons~ipad", "CFBundleIcons~ipad" not in plist_raw)
 
     # V: 版本三处同步 0.3.0
-    check("V 版本0.3.0三处同步",
-          "Version: 0.3.0" in ctrl and "<string>0.3.0</string>" in plist_raw and "v0.3.0" in tweak)
+    check("V 版本0.3.1三处同步",
+          "Version: 0.3.1" in ctrl and "<string>0.3.1</string>" in plist_raw and "v0.3.1" in tweak)
 
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)

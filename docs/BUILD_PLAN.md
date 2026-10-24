@@ -301,18 +301,18 @@ dpkg: error processing archive .../ATLite_0.1.0_iphoneos-arm64.deb (--install):
 
 | # | 事实 | 证据 |
 |---|------|------|
-| F23 | roothide 包规格：`Architecture: iphoneos-arm64e`，布局前缀 `/rootfs/var/jb`；rootless 包为 `iphoneos-arm64` + `/var/jb`；rootful 为 `iphoneos-arm` | JBDev DeepWiki 架构映射表；LookInside-Tweak 同时发布 `*_iphoneos-arm64.deb` 与 `*_iphoneos-arm64e.deb` 两个包 |
+| F23 | roothide 包规格：`Architecture: iphoneos-arm64e`，**无前缀 rootful 式布局**（~~前缀 `/rootfs/var/jb`~~ 已被 E22/R22 推翻：官方 com.roothide.patcher deb 实证无前缀，roothide dpkg 在 vroot 下自动装进随机 jbroot）；rootless 包为 `iphoneos-arm64` + `/var/jb`；rootful 为 `iphoneos-arm` | JBDev DeepWiki 架构映射表；官方 patcher deb 拆解 |
 | F24 | Theos 官方 `vendor/mod/` 只有 `rootless` 一个 scheme 模块，**没有 roothide** | theos/theos 仓库 API（mod/ 仅 .keep；vendor/mod/ 仅 rootless/） |
 | F25 | Theos `deb.mk` 打包时 sed 删除 control 的 `Architecture:` 行，再用 `echo "Architecture: $(THEOS_PACKAGE_ARCH)"` 重写 → **改 control 文件的 Architecture 无效**，必须让 `THEOS_PACKAGE_ARCH` 本身等于 `iphoneos-arm64e` | makefiles/package/deb.mk 源码 |
 | F26 | rootless scheme 模块 `vendor/mod/rootless/package/deb.mk` 强制 `THEOS_PACKAGE_ARCH := iphoneos-arm64`，覆盖任何外部设置 | 同上模块源码 |
 | F27 | `_THEOS_SCHEME_STAGE` 由 common.mk L272-273 从 `THEOS_PACKAGE_INSTALL_PREFIX` 自动推导；自制 scheme 模块只需两个文件：`package.mk`（设前缀）+ `package/deb.mk`（设 ARCH） | common.mk / rootless 模块结构 |
 | F28 | **二进制无需重编**：run#16 已验证 dylib 为 arm64+arm64e fat；roothide 设备（A12+，arm64e）加载 arm64e slice，App 同理 | run#16 产物 fat header 验证 |
-| F29 | roothide 进程路径重定向：`/var/jb` → `/rootfs/var/jb`；tweak 内 `ATJBRoot()` 探测 `/var/jb` 的逻辑在 roothide 下天然兼容 | roothide 官方布局（layout_roothide 前缀 .jbroot 运行时解析） |
+| F29 | roothide 下 `/var/jb` 是指向随机 jbroot 的 symlink（Dopamine-roothide DOBootstrapper.m L481 实证）；tweak 内 `ATJBRoot()` 探测 `/var/jb` 天然兼容；jbroot 真实位置 `/var/containers/Bundle/Application/.jbroot-*`（同文件 find_jbroot 实证） | Dopamine-roothide 2.x 源码 |
 | F30 | App 包装后必须执行 uicache，否则桌面不显示图标；postinst 需容错（uicache 不存在时不得让 dpkg configure 失败） | JBDev 文档 "System Application Already Installed Error" |
 
 ### 修订方案（4.9）
 
-1. CI「Setup Theos」后新增步骤：自制 roothide scheme 模块（写 `$THEOS/vendor/mod/roothide/{package.mk,package/deb.mk}`，仿 rootless，前缀 `/rootfs/var/jb`，ARCH `iphoneos-arm64e`）
+1. CI「Setup Theos」后新增步骤：自制 roothide scheme 模块（写 `$THEOS/vendor/mod/roothide/{package.mk,package/deb.mk}`，仿 rootless；**package.mk 留空不设前缀**（E22/R22 修正），package/deb.mk 强制 ARCH `iphoneos-arm64e`）
 2. workflow env 与 3 个 Makefile：`THEOS_PACKAGE_SCHEME` rootless → roothide
 3. `control`：`Architecture: iphoneos-arm64e`（保持一致性；实际生效值由 F25 机制决定）
 4. 新增 `app/layout/DEBIAN/postinst`（可执行）：`uicache -p .../ATLite.app || true`

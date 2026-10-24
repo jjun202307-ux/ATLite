@@ -49,7 +49,7 @@
 ### E7. 包架构与越狱类型不匹配 → dpkg 拒装
 - **现象**：rootless 包（iphoneos-arm64）装 roothide 设备（系统架构 iphoneos-arm64e）被拒。
 - **根因**：Theos 无 roothide scheme 模块，默认按 rootless 打包。
-- **R7：roothide 三要素：`Architecture: iphoneos-arm64e`（由自制 scheme 模块的 `THEOS_PACKAGE_ARCH` 决定，改 control 无效）、安装前缀 `/rootfs/var/jb`、postinst 放**根级** `layout/DEBIAN/`（子项目 layout 在 aggregate 下会被忽略）。**
+- **R7：roothide 三要素：`Architecture: iphoneos-arm64e`（由自制 scheme 模块的 `THEOS_PACKAGE_ARCH` 决定，改 control 无效）、**无前缀 rootful 式布局**（roothide dpkg 在 vroot 下自动装进随机 jbroot，见 E22/R22——早期"/rootfs/var/jb 前缀"是错的）、postinst 放**根级** `layout/DEBIAN/`（子项目 layout 在 aggregate 下会被忽略）。**
 
 ### E8. filter plist 文件名不匹配 → stage 阶段失败
 - **现象**：`ATLite.plist` 不被识别，改名 `ATLiteTweak.plist`（== TWEAK_NAME）才通过。
@@ -58,6 +58,13 @@
 ### E9. 自测脚本没随包发布 → 装完无东西可测
 - **现象**：test.at 只在 GitHub 仓库里，手机上没有任何脚本可运行。
 - **R9：用户在设备上需要的每一份文件必须打进 deb（本次重写：test.at 随 App Resources 发布，首次启动自动复制进 Scripts 目录）。**
+
+### E22. roothide 包前缀凭推测发明（/rootfs/var/jb）→ 非规范布局，靠巧合才能装上
+- **现象**：v0.1.0-v0.3.0 的 CI 自制 roothide 模块设了 `THEOS_PACKAGE_INSTALL_PREFIX = /rootfs/var/jb`，包内路径 `rootfs/var/jb/Applications/ATLite.app`。在 roothide 设备上能装上纯属两层巧合：vroot 语义下 `/rootfs` 映射真实 rootfs + Dopamine-roothide 恰好创建了 `/var/jb` → jbroot 的 symlink（DOBootstrapper.m L481）。在没有该 symlink 的 roothide 实现（如 RootHide Bootstrap）上必装错位置。
+- **根因**：官方 roothide 包布局是**无前缀 rootful 式**（官方 com.roothide.patcher deb 拆解实证：`./Applications/Patcher.app`），roothide dpkg 在 vroot 环境（jbroot 为根）自动安装进随机 jbroot；roothide/theos 官方 roothide 模块的 package.mk 就是空的。当时没去拆官方包验证，凭 vroot 语义推测发明了前缀。
+- **为什么没发现**：包装上了、图标出来了，"能用"掩盖了"不规范"。
+- **R22：deb 布局/maintainer 脚本路径必须以官方实证为准（拆一个官方 roothide 包看真实结构），禁止凭语义推测发明路径前缀；maintainer 脚本里一律用 vroot 路径（/Applications/...），不写 jbroot 真实路径。**
+- 同类附带修正：jbroot 探测的 `/var/mobile/.jbroot-*` 无证据支持，实证位置是 `/var/containers/Bundle/Application/.jbroot-*`（DOBootstrapper.m find_jbroot）。
 
 ## C. 构建期错误（CI 能抓到，但每条都浪费一轮构建）
 
