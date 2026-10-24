@@ -87,6 +87,34 @@ static NSString *ATLibsDir(void)    { return [ATBaseDir() stringByAppendingPathC
 static NSString *ATLogsDir(void)    { return [ATBaseDir() stringByAppendingPathComponent:@"logs"]; }
 static NSString *ATImagesDir(void)  { return [ATBaseDir() stringByAppendingPathComponent:@"Images"]; }
 
+// ---------------------------------------------------------------------------
+// E26 强停（定义必须早于所有使用者：l_usleep/l_msleep 在下方、hook 在更下方。
+// ⚠ E27 教训：C 是"先声明后使用"，把定义放在使用点之后 = 编译期 undeclared identifier。
+//    静态断言必须检查**顺序**，不能只检查字符串是否存在。）
+// ---------------------------------------------------------------------------
+static NSString *ATStopFlagPath(void) {
+    return [ATBaseDir() stringByAppendingPathComponent:@"stop.flag"];
+}
+static NSString *ATStatusPath(void) {
+    return [ATBaseDir() stringByAppendingPathComponent:@"status.json"];
+}
+static volatile sig_atomic_t gStopRequested = 0;
+static BOOL ATShouldStop(void) {
+    if (gStopRequested) return YES;
+    return [[NSFileManager defaultManager] fileExistsAtPath:ATStopFlagPath()];
+}
+static void ATClearStopFlag(void) {
+    gStopRequested = 0;
+    [[NSFileManager defaultManager] removeItemAtPath:ATStopFlagPath() error:nil];
+}
+static void ATWriteStatus(BOOL running, NSString *name) {
+    NSDictionary *d = @{@"running": @(running),
+                        @"script": name ?: @"",
+                        @"time": @(CFAbsoluteTimeGetCurrent())};
+    NSData *j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+    if (j) [j writeToFile:ATStatusPath() atomically:YES];
+}
+
 #pragma mark - Logging
 
 static void ATLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1,2);
@@ -931,30 +959,8 @@ static CFAbsoluteTime gScriptDeadline = 0.0;
 //   通道 2（兜底）：<jbroot>/.../stop.flag 文件 —— 就算通知中心不工作、
 //                   SpringBoard 主线程忙到不处理回调，脚本下次检查文件时也能停下
 // 两条通道都在 hook（每 10 万指令）与 sleep 分片里被检查。
+// （具体实现定义在文件前部 Paths 段之后 —— C 要求先声明后使用）
 // ---------------------------------------------------------------------------
-static volatile sig_atomic_t gStopRequested = 0;
-
-static NSString *ATStopFlagPath(void) {
-    return [ATBaseDir() stringByAppendingPathComponent:@"stop.flag"];
-}
-static NSString *ATStatusPath(void) {
-    return [ATBaseDir() stringByAppendingPathComponent:@"status.json"];
-}
-static BOOL ATShouldStop(void) {
-    if (gStopRequested) return YES;
-    return [[NSFileManager defaultManager] fileExistsAtPath:ATStopFlagPath()];
-}
-static void ATClearStopFlag(void) {
-    gStopRequested = 0;
-    [[NSFileManager defaultManager] removeItemAtPath:ATStopFlagPath() error:nil];
-}
-static void ATWriteStatus(BOOL running, NSString *name) {
-    NSDictionary *d = @{@"running": @(running),
-                        @"script": name ?: @"",
-                        @"time": @(CFAbsoluteTimeGetCurrent())};
-    NSData *j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
-    if (j) [j writeToFile:ATStatusPath() atomically:YES];
-}
 
 static void ATLuaTimeoutHook(lua_State *L, lua_Debug *ar) {
     (void)ar;

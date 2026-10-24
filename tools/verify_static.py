@@ -273,6 +273,17 @@ def main(root):
     check("R26-E26 日志页有停止入口",
           "stopScript" in strip_comments(read(root, "app/Source/ATLLogViewController.m")))
 
+    # ---- R27/E27: C 先声明后使用 —— 定义顺序守卫（v0.3.5 构建失败实证）----
+    # 只检查"字符串存在"抓不到 undeclared identifier，必须检查定义早于使用
+    for sym in ["ATShouldStop", "ATStopFlagPath", "ATWriteStatus", "ATClearStopFlag"]:
+        defs = [i for i in range(len(tweak_code)) if tweak_code.startswith("static BOOL " + sym, i)
+                or tweak_code.startswith("static NSString *" + sym, i)
+                or tweak_code.startswith("static void " + sym, i)]
+        uses = [i for i in range(len(tweak_code)) if (sym + "(") in tweak_code[i:i + len(sym) + 1]]
+        first_use = min([i for i in uses if not tweak_code.startswith("static", max(0, i - 40))] or [-1])
+        ok = bool(defs) and (first_use == -1 or defs[0] < first_use)
+        check("R27-E27 %s 定义早于使用" % sym, ok)
+
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)
     check("Lua vendor 路径", "-Ilib/lua53" in read(root, "tweak/Makefile"))
