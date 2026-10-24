@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.3 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.4 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -185,6 +185,27 @@ static float ATJitter(float amount) {
     return ((float)arc4random_uniform(2000) / 1999.0f * 2.0f - 1.0f) * amount;
 }
 
+// ---------------------------------------------------------------------------
+// E25-C：事件节流。脚本若高频合成 HID 事件（死循环 / 无 sleep 的密集点击），
+// 会把 SpringBoard 的事件队列淹没 —— 表现正是"整个系统打不开新程序"。
+// 这里限制最小事件间隔（默认 8ms ≈ 125 事件/秒），超出就 sleeps 补齐。
+// ---------------------------------------------------------------------------
+#define AT_MIN_EVENT_INTERVAL_SEC 0.008
+static CFAbsoluteTime gLastEventTime = 0.0;
+static void ATThrottleEvents(void) {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (gLastEventTime > 0) {
+        double dt = now - gLastEventTime;
+        if (dt >= 0 && dt < AT_MIN_EVENT_INTERVAL_SEC) {
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = (long)((AT_MIN_EVENT_INTERVAL_SEC - dt) * 1000000000.0);
+            nanosleep(&ts, NULL);
+        }
+    }
+    gLastEventTime = CFAbsoluteTimeGetCurrent();
+}
+
 // mach_absolute_time() ± 1ms（mach_timebase 正确换算 ticks）
 static uint64_t ATTimestampNow(void) {
     static mach_timebase_info_data_t tb = {0, 0};
@@ -232,6 +253,7 @@ static void ATSimulateTouch(int action, int finger, float x, float y) {
     _AT_IOHIDEventSetIntegerValue(fg,   AT_FIELD_IS_DISPLAY_INTEGRATED, 1);
     _AT_IOHIDEventSetFloatValue(fg, AT_FIELD_MAJOR_RADIUS, major);
     _AT_IOHIDEventSetFloatValue(fg, AT_FIELD_MINOR_RADIUS, minor);
+    ATThrottleEvents(); // E25-C：节流，避免事件风暴拖垮 SpringBoard
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, hand);
     CFRelease(hand);
     CFRelease(fg);
@@ -245,6 +267,7 @@ static void ATSimulateKey(BOOL down, int usage) {
         kCFAllocatorDefault, ATTimestampNow(),
         AT_HID_USAGE_PAGE_CONSUMER, (uint16_t)usage, down ? TRUE : FALSE, 0);
     if (!ev) return;
+    ATThrottleEvents(); // E25-C
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, ev);
     CFRelease(ev);
 }
@@ -306,11 +329,48 @@ static void ATFreeBitmap(ATBitmap *b) {
     b->w = b->h = 0;
 }
 
+// ---------------------------------------------------------------------------
+// E25-A：抓屏看门狗。
+// CARenderServerCaptureDisplay 是到 render server 的**同步 IPC**。一旦 render server
+// 与 SpringBoard 互相等待，这个调用永不返回 —— 而脚本跑在 SpringBoard 进程里，
+// 表现就是"整个系统打不开新程序，只能重启"。
+// 对策：把调用挪到专用串行队列，调用方只等有限时间（1.5s）。超时即认定渲染链路
+// 已挂，本进程内**永久停用抓屏**并记日志 —— 宁可功能失效，也不拖垮系统。
+// 注：AutoTouch（稳定运行多年）实证只导入 _CARenderServerRenderDisplay（调用者自带
+// IOSurface），并未使用 CaptureDisplay；本版先加看门狗止血，API 对齐见 ERRORS.md E25。
+// ---------------------------------------------------------------------------
+#define AT_CAPTURE_TIMEOUT_SEC 1.5
+static dispatch_queue_t gCaptureQueue = NULL;
+static BOOL gCaptureBroken = NO;
+
+static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) {
+    if (gCaptureBroken) return NULL;
+    if (!gCaptureQueue) {
+        gCaptureQueue = dispatch_queue_create("me.atlite.capture", DISPATCH_QUEUE_SERIAL);
+    }
+    __block IOSurfaceRef s = NULL;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    dispatch_async(gCaptureQueue, ^{
+        s = _AT_CARenderServerCaptureDisplay(0, CFSTR("LCD"), NULL);
+        if (!s) s = _AT_CARenderServerCaptureDisplay(0, CFSTR("Main"), NULL);
+        dispatch_semaphore_signal(sem);
+    });
+    long r = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW,
+                                    (int64_t)(AT_CAPTURE_TIMEOUT_SEC * NSEC_PER_SEC)));
+    if (r != 0) {
+        // 超时：渲染链路已挂。标记后不再重试（重试只会再泄漏一个卡死的线程）
+        gCaptureBroken = YES;
+        ATLog(@"capture hung >%.1fs — disabled for this session (E25 render-server deadlock guard)",
+              AT_CAPTURE_TIMEOUT_SEC);
+        return NULL;
+    }
+    return s;
+}
+
 // 抓主屏 → RGBA8（仅 SpringBoard 进程可用）
 static BOOL ATCaptureScreen(ATBitmap *out) {
     if (!gCaptureReady) return NO;
-    IOSurfaceRef s = _AT_CARenderServerCaptureDisplay(0, CFSTR("LCD"), NULL);
-    if (!s) s = _AT_CARenderServerCaptureDisplay(0, CFSTR("Main"), NULL);
+    IOSurfaceRef s = ATCaptureSurfaceWithTimeout();
     if (!s) return NO;
     uint32_t seed = 0;
     if (_AT_IOSurfaceLock) _AT_IOSurfaceLock(s, 1 /*kIOSurfaceLockReadOnly*/, &seed);
@@ -708,7 +768,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.3 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.4 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -838,6 +898,23 @@ static void ATEnsureLuaLibraries(void) {
 }
 
 // 执行：先跑 Extensions.lua（可被用户覆盖），再跑脚本本体
+// ---------------------------------------------------------------------------
+// E25-B：脚本执行时限。用户脚本跑在 SpringBoard 进程里，一个死循环脚本
+// （while true do tap() end）会持续占用进程、不停合成事件，直接把系统拖到
+// 打不开任何新程序。这里用 Lua 的 count hook 每 10 万条指令检查一次挂钟时间，
+// 超时即中止脚本（不中止 SpringBoard）。
+// ---------------------------------------------------------------------------
+#define AT_SCRIPT_TIMEOUT_SEC 60
+#define AT_SCRIPT_HOOK_COUNT  100000
+static CFAbsoluteTime gScriptDeadline = 0.0;
+static void ATLuaTimeoutHook(lua_State *L, lua_Debug *ar) {
+    (void)ar;
+    if (gScriptDeadline > 0 && CFAbsoluteTimeGetCurrent() > gScriptDeadline) {
+        luaL_error(L, "ATLite: script exceeded %d s limit (aborted to protect SpringBoard)",
+                   (int)AT_SCRIPT_TIMEOUT_SEC);
+    }
+}
+
 static void ATPlayLuaFile(NSString *scriptPath) {
     if (!gHIDReady) { ATLog(@"play aborted: HID not ready"); return; }
     if (![[NSFileManager defaultManager] fileExistsAtPath:scriptPath]) {
@@ -846,6 +923,9 @@ static void ATPlayLuaFile(NSString *scriptPath) {
     }
     lua_State *L = luaL_newstate();
     luaL_openlibs(L);
+    // E25-B：装上超时钩子（在跑任何用户代码之前）
+    gScriptDeadline = CFAbsoluteTimeGetCurrent() + AT_SCRIPT_TIMEOUT_SEC;
+    lua_sethook(L, ATLuaTimeoutHook, LUA_MASKCOUNT, AT_SCRIPT_HOOK_COUNT);
     luaL_newlib(L, ATLuaFuncs);
     lua_setglobal(L, "at");
     // 复制到 _G 顶层: touchDown(...) 直接可用（AutoTouch 风格）
@@ -879,6 +959,7 @@ static void ATPlayLuaFile(NSString *scriptPath) {
     } else {
         ATLog(@"script finished: %@", scriptPath.lastPathComponent);
     }
+    gScriptDeadline = 0; // E25-B：本次执行结束，解除时限
     lua_close(L);
 }
 
@@ -941,7 +1022,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.3 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.4 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

@@ -230,8 +230,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步 0.3.2
-    check("V 版本0.3.3三处同步",
-          "Version: 0.3.3" in ctrl and "<string>0.3.3</string>" in plist_raw and "v0.3.3" in tweak)
+    check("V 版本0.3.4三处同步",
+          "Version: 0.3.4" in ctrl and "<string>0.3.4</string>" in plist_raw and "v0.3.4" in tweak)
 
     # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
     logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")
@@ -248,6 +248,15 @@ def main(root):
     srcs = [os.path.basename(p) for p in _glob.glob(os.path.join(root, "app/Source", "*.m"))]
     missing_src = [s for s in srcs if ("Source/" + s) not in app_mk]
     check("R24 Makefile FILES 覆盖全部 Source/*.m", not missing_src, "漏登记%s" % missing_src)
+
+    # ---- R25/E25: 系统级 hang 防护（脚本跑在 SpringBoard 进程内）----
+    check("R25-A 抓屏带超时看门狗",
+          "ATCaptureSurfaceWithTimeout" in tweak_code and "gCaptureBroken" in tweak_code)
+    check("R25-A 抓屏超时后永久停用", "gCaptureBroken = YES" in tweak_code)
+    check("R25-B 脚本执行时限钩子", "lua_sethook" in tweak_code and "ATLuaTimeoutHook" in tweak_code)
+    check("R25-B 时限钩子在跑用户代码前装配",
+          tweak_code.find("lua_sethook") < tweak_code.find("luaL_dostring"))
+    check("R25-C HID 事件节流", "ATThrottleEvents" in tweak_code)
 
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)

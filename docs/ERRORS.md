@@ -85,6 +85,19 @@
   4. 路径逻辑抽出为 `ATLPaths.h/.m` 共享模块（App 与日志页共用）
 - **R24：任何"发起方—执行方"分离的架构，发起方必须内置查看执行方输出的通道；且该通道要能自我诊断（说清是没启动、没送达还是没产出），不能只显示空白。** 另：app/Source 新增 .m 必须同步登记 `ATLite_FILES`（已加通用守卫断言防漏）。
 
+### E25. 脚本跑在 SpringBoard 进程内 → 一个卡死就把整个系统拖垮（用户实报：打不开新程序，只能重启）
+- **现象**：用户运行脚本后，整个系统无法打开任何新程序，只能重启设备。
+- **根因**：Lua 引擎住在 **SpringBoard 进程**（触摸/抓屏必须在该进程才有效）。任何一次"永不返回"的阻塞或"停不下来"的循环，代价都是整个系统，而不是一个 App 崩溃。三个具体风险点：
+  1. **抓屏同步 IPC 无超时**（最可疑）：`CARenderServerCaptureDisplay` 是到 render server 的同步调用；若 render server 与 SpringBoard 互相等待，该调用永不返回。补充证据：AutoTouch 的 libATGraphic **只导入 `_CARenderServerRenderDisplay`**（调用者自带 IOSurface），**根本没有** `CARenderServerCaptureDisplay` —— 我们用的 API 与稳定商业产品的实证选择不一致。
+  2. **脚本无执行时限**：死循环脚本（`while true do tap() end`）永不停歇。
+  3. **HID 事件无节流**：密集合成事件会淹没 SpringBoard 事件队列，表现同样是系统无响应。
+- **修复（v0.3.4，止血）**：
+  - A. `ATCaptureSurfaceWithTimeout()`：抓屏挪到专用串行队列 + `dispatch_semaphore` 只等 1.5s；超时即置 `gCaptureBroken` **本进程内永久停用抓屏**并记日志——宁可功能失效也不拖垮系统
+  - B. `ATLuaTimeoutHook`：Lua count hook 每 10 万条指令查一次挂钟，超过 60s 中止脚本（不中止 SpringBoard）
+  - C. `ATThrottleEvents()`：HID 事件最小间隔 8ms（≈125/s），防事件风暴
+- **R25：注入型代码运行在系统进程里时，每一个"可能不返回/可能不停止"的调用都必须有看门狗或上限；同步 IPC 一律加超时，用户脚本一律加时限，事件/资源类循环一律加节流。功能失效可接受，系统挂死不可接受。**
+- **遗留（v0.3.5 候选）**：抓屏 API 对齐 AutoTouch 实证的 `CARenderServerRenderDisplay`（调用者自带 IOSurface），需自建 IOSurface 并确认像素格式常量，风险较高故本版未动。
+
 ## C. 构建期错误（CI 能抓到，但每条都浪费一轮构建）
 
 ### E10. 假设 lua/lua 仓库是 tarball 的 src/ 布局
