@@ -37,6 +37,8 @@ NSString *ATLScriptsDir(void) { return [ATLBaseDir() stringByAppendingPathCompon
 NSString *ATLImagesDir(void)  { return [ATLBaseDir() stringByAppendingPathComponent:@"Images"]; }
 NSString *ATLLogsDir(void)    { return [ATLBaseDir() stringByAppendingPathComponent:@"logs"]; }
 NSString *ATLCommandPath(void){ return [ATLBaseDir() stringByAppendingPathComponent:@"command.json"]; }
+NSString *ATLStopFlagPath(void){ return [ATLBaseDir() stringByAppendingPathComponent:@"stop.flag"]; }
+NSString *ATLStatusPath(void)  { return [ATLBaseDir() stringByAppendingPathComponent:@"status.json"]; }
 
 NSArray<NSString *> *ATLLogCandidatePaths(void) {
     NSMutableArray<NSString *> *roots = [NSMutableArray array];

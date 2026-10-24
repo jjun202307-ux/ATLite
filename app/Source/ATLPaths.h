@@ -9,6 +9,9 @@ NSString *ATLScriptsDir(void);
 NSString *ATLImagesDir(void);
 NSString *ATLLogsDir(void);
 NSString *ATLCommandPath(void);
+// E26 强停：stop.flag 是不依赖通知的兜底停止信号；status.json 供 App 显示运行态
+NSString *ATLStopFlagPath(void);
+NSString *ATLStatusPath(void);
 
 // 日志文件候选路径（E24）：App 侧推导的 jbroot 与 tweak 侧可能不同（bundlePath vs dladdr），
 // 逐个候选探测，避免"文件其实在，只是路径字符串不同"导致的调试盲区。

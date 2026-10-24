@@ -1,5 +1,6 @@
 #import "ATLLogViewController.h"
 #import "ATLPaths.h"
+#import "ATLCommand.h"
 
 // E24：日志查看页。职责：
 //  1) 显示 <jbroot>/var/mobile/Library/ATLite/logs/tweak.log（多路径探测，容忍 jbroot 推导差异）
@@ -38,7 +39,13 @@
     self.navigationItem.rightBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
                                                       target:self action:@selector(reload)];
+    // E26：日志页是最可能需要强停的地方（看着脚本跑疯了就想停）
+    UIBarButtonItem *stopItem = [[UIBarButtonItem alloc] initWithTitle:@"⏹ 停止"
+                                                                style:UIBarButtonItemStylePlain
+                                                               target:self action:@selector(stopScript)];
+    stopItem.tintColor = [UIColor systemRedColor];
     [self setToolbarItems:@[
+        stopItem,
         [[UIBarButtonItem alloc] initWithTitle:@"清空" style:UIBarButtonItemStylePlain
                                         target:self action:@selector(clearLog)],
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil],
@@ -70,12 +77,29 @@
     // 评审 C1：必须减 bottom（工具栏可见时计入 safeAreaInsets.bottom），
     // 否则 textView 下沿被工具栏压住，最新几行日志（本页核心用途）看不见
     CGFloat bottom = self.view.safeAreaInsets.bottom;
-    self.pathLabel.frame = CGRectMake(0, top, w, 34);
-    self.text.frame = CGRectMake(0, top + 34, w, MAX(h - top - 34 - bottom, 60));
+    self.pathLabel.frame = CGRectMake(0, top, w, 44); // 两行：运行状态 + 日志路径
+    self.text.frame = CGRectMake(0, top + 44, w, MAX(h - top - 44 - bottom, 60));
     self.text.contentInset = UIEdgeInsetsMake(0, 0, 8, 0);
 }
 
 #pragma mark - Actions
+
+- (void)stopScript {
+    ATLSendStop(); // E26 双通道
+    [self reload];
+}
+
+// 运行状态（tweak 写 status.json）：让"到底还在不在跑"不再是猜的
+- (NSString *)statusText {
+    NSData *d = [NSData dataWithContentsOfFile:ATLStatusPath()];
+    if (!d) return @"状态: 未知（tweak 未运行过脚本）";
+    NSDictionary *s = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+    if (![s isKindOfClass:[NSDictionary class]]) return @"状态: 未知";
+    BOOL running = [s[@"running"] boolValue];
+    NSString *name = s[@"script"] ?: @"";
+    return running ? [NSString stringWithFormat:@"状态: 运行中 · %@", name]
+                   : @"状态: 空闲";
+}
 
 - (void)toggleAuto {
     self.autoRefresh = !self.autoRefresh;
@@ -143,7 +167,7 @@
     }
     self.text.text = s;
     self.text.textColor = [UIColor blackColor];
-    self.pathLabel.text = p;
+    self.pathLabel.text = [NSString stringWithFormat:@"%@\n%@", [self statusText], p];
     if (s.length > 0) {
         [self.text scrollRangeToVisible:NSMakeRange(s.length - 1, 1)];
     }

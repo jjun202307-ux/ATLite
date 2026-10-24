@@ -2,6 +2,7 @@
 #import "ATLRootViewController.h"
 #import "ATLWebServer.h"
 #import "ATLPaths.h"
+#import "ATLCommand.h"
 #import "ATLLogViewController.h"
 #import <ifaddrs.h>
 #import <arpa/inet.h>
@@ -34,7 +35,12 @@
     UIBarButtonItem *log = [[UIBarButtonItem alloc] initWithTitle:@"日志"
                                                             style:UIBarButtonItemStylePlain
                                                            target:self action:@selector(openLog)];
-    self.navigationItem.rightBarButtonItems = @[log, refresh];
+    // E26：强停入口。脚本跑在 SpringBoard 里，划掉 App 对它无效 —— 必须给一个显式停止
+    UIBarButtonItem *stop = [[UIBarButtonItem alloc] initWithTitle:@"⏹ 停止"
+                                                             style:UIBarButtonItemStylePlain
+                                                            target:self action:@selector(stopScript)];
+    stop.tintColor = [UIColor systemRedColor];
+    self.navigationItem.rightBarButtonItems = @[stop, log, refresh];
 
     // 启动期任何异常都不允许杀死 App（v0.1.0 "打不开"的教训：启动链路必须防御）
     @try {
@@ -102,13 +108,20 @@
 #pragma mark - Run
 
 - (void)runScript:(NSString *)name {
-    NSDictionary *cmd = @{@"cmd": @"run", @"script": name};
-    NSData *data = [NSJSONSerialization dataWithJSONObject:cmd options:0 error:nil];
-    [data writeToFile:ATLCommandPath() atomically:YES];
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-                                         (__bridge CFStringRef)ATLDarwinNotifyName, NULL, NULL, YES);
+    ATLSendCommand(@"run", name);
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已发送运行命令"
                                                                   message:name
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+#pragma mark - Stop (E26)
+
+- (void)stopScript {
+    ATLSendStop(); // E26：双通道（stop.flag 文件兜底 + 通知）
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已发送强停"
+        message:@"脚本会在下一个检查点停下（通常 <1 秒）。\n若日志显示仍在跑，说明它卡在抓屏，最多再等 1.5 秒看门狗。" 
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];

@@ -230,8 +230,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步 0.3.2
-    check("V 版本0.3.4三处同步",
-          "Version: 0.3.4" in ctrl and "<string>0.3.4</string>" in plist_raw and "v0.3.4" in tweak)
+    check("V 版本0.3.5三处同步",
+          "Version: 0.3.5" in ctrl and "<string>0.3.5</string>" in plist_raw and "v0.3.5" in tweak)
 
     # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
     logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")
@@ -257,6 +257,21 @@ def main(root):
     check("R25-B 时限钩子在跑用户代码前装配",
           tweak_code.find("lua_sethook") < tweak_code.find("luaL_dostring"))
     check("R25-C HID 事件节流", "ATThrottleEvents" in tweak_code)
+
+    # ---- R26/E26: 强停兜底（脚本跑在 SpringBoard，杀 App 无效）----
+    check("R26-E26 tweak 侧停止标志", "gStopRequested" in tweak_code)
+    check("R26-E26 停止双通道(通知+flag文件)",
+          "ATStopFlagPath" in tweak_code and "fileExistsAtPath:ATStopFlagPath" in tweak_code)
+    check("R26-E26 hook 检查停止", "ATShouldStop" in tweak_code)
+    check("R26-E26 sleep 分片可中断",
+          tweak_code.count("ATShouldStop") >= 3)  # hook + usleep + msleep
+    check("R26-E26 新脚本前清除停止标志", "ATClearStopFlag" in tweak_code)
+    check("R26-E26 tweak 处理 stop 命令",
+          'isEqualToString:@"stop"' in tweak_code)
+    check("R26-E26 App 侧停止命令模块", os.path.isfile(os.path.join(root, "app/Source/ATLCommand.m")))
+    check("R26-E26 App 主界面有停止入口", "stopScript" in vc_code)
+    check("R26-E26 日志页有停止入口",
+          "stopScript" in strip_comments(read(root, "app/Source/ATLLogViewController.m")))
 
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)

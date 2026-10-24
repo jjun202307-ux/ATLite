@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.4 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.5 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -608,19 +608,34 @@ static int l_keyUp(lua_State *L) {
 // AutoTouch 语义: usleep(微秒)
 static int l_usleep(lua_State *L) {
     double us = luaL_checknumber(L,1);
-    struct timespec req;
-    req.tv_sec = (time_t)(us / 1e6);
-    req.tv_nsec = (long)((us - req.tv_sec * 1e6) * 1e3);
-    nanosleep(&req, NULL);
+    // E26：分片睡眠（每片 ≤50ms 检查一次停止）。
+    // 否则 usleep(5秒) 期间点停止要等满 5 秒才生效，用户会以为停不掉。
+    double left = us;
+    while (left > 0) {
+        double slice = left > 50000.0 ? 50000.0 : left;
+        struct timespec req;
+        req.tv_sec = 0;
+        req.tv_nsec = (long)(slice * 1000.0);
+        nanosleep(&req, NULL);
+        if (ATShouldStop()) return luaL_error(L, "STOP");
+        left -= slice;
+    }
     return 0;
 }
 // ATLite 扩展: msleep(毫秒)
 static int l_msleep(lua_State *L) {
     double ms = luaL_checknumber(L,1);
-    struct timespec req;
-    req.tv_sec = (time_t)(ms / 1000);
-    req.tv_nsec = (long)((ms - req.tv_sec * 1000) * 1e6);
-    nanosleep(&req, NULL);
+    // E26：同 l_usleep，分片检查停止
+    double left = ms;
+    while (left > 0) {
+        double slice = left > 50.0 ? 50.0 : left;
+        struct timespec req;
+        req.tv_sec = 0;
+        req.tv_nsec = (long)(slice * 1000000.0);
+        nanosleep(&req, NULL);
+        if (ATShouldStop()) return luaL_error(L, "STOP");
+        left -= slice;
+    }
     return 0;
 }
 static int l_log(lua_State *L) {
@@ -768,7 +783,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.4 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.5 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -907,11 +922,49 @@ static void ATEnsureLuaLibraries(void) {
 #define AT_SCRIPT_TIMEOUT_SEC 60
 #define AT_SCRIPT_HOOK_COUNT  100000
 static CFAbsoluteTime gScriptDeadline = 0.0;
+
+// ---------------------------------------------------------------------------
+// E26：强停兜底。
+// 脚本跑在 SpringBoard 进程里，**把 App 从后台划掉对它毫无影响**（App 只是遥控器）。
+// 所以停止必须是"脚本自己能看见"的信号，不能只依赖 App 存活或通知送达：
+//   通道 1（快）：Darwin 通知 → gStopRequested 内存标志
+//   通道 2（兜底）：<jbroot>/.../stop.flag 文件 —— 就算通知中心不工作、
+//                   SpringBoard 主线程忙到不处理回调，脚本下次检查文件时也能停下
+// 两条通道都在 hook（每 10 万指令）与 sleep 分片里被检查。
+// ---------------------------------------------------------------------------
+static volatile sig_atomic_t gStopRequested = 0;
+
+static NSString *ATStopFlagPath(void) {
+    return [ATBaseDir() stringByAppendingPathComponent:@"stop.flag"];
+}
+static NSString *ATStatusPath(void) {
+    return [ATBaseDir() stringByAppendingPathComponent:@"status.json"];
+}
+static BOOL ATShouldStop(void) {
+    if (gStopRequested) return YES;
+    return [[NSFileManager defaultManager] fileExistsAtPath:ATStopFlagPath()];
+}
+static void ATClearStopFlag(void) {
+    gStopRequested = 0;
+    [[NSFileManager defaultManager] removeItemAtPath:ATStopFlagPath() error:nil];
+}
+static void ATWriteStatus(BOOL running, NSString *name) {
+    NSDictionary *d = @{@"running": @(running),
+                        @"script": name ?: @"",
+                        @"time": @(CFAbsoluteTimeGetCurrent())};
+    NSData *j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+    if (j) [j writeToFile:ATStatusPath() atomically:YES];
+}
+
 static void ATLuaTimeoutHook(lua_State *L, lua_Debug *ar) {
     (void)ar;
-    if (gScriptDeadline > 0 && CFAbsoluteTimeGetCurrent() > gScriptDeadline) {
-        luaL_error(L, "ATLite: script exceeded %d s limit (aborted to protect SpringBoard)",
-                   (int)AT_SCRIPT_TIMEOUT_SEC);
+    @autoreleasepool {
+        // E26：停止优先于超时判定
+        if (ATShouldStop()) luaL_error(L, "STOP");
+        if (gScriptDeadline > 0 && CFAbsoluteTimeGetCurrent() > gScriptDeadline) {
+            luaL_error(L, "ATLite: script exceeded %d s limit (aborted to protect SpringBoard)",
+                       (int)AT_SCRIPT_TIMEOUT_SEC);
+        }
     }
 }
 
@@ -921,9 +974,12 @@ static void ATPlayLuaFile(NSString *scriptPath) {
         ATLog(@"script not found: %@", scriptPath);
         return;
     }
+    // E26：新脚本开跑前清掉上一次的停止标志（否则会被上一轮的 flag 立刻停掉）
+    ATClearStopFlag();
+    ATWriteStatus(YES, scriptPath.lastPathComponent);
     lua_State *L = luaL_newstate();
     luaL_openlibs(L);
-    // E25-B：装上超时钩子（在跑任何用户代码之前）
+    // E25-B/E26：装上超时+停止钩子（在跑任何用户代码之前）
     gScriptDeadline = CFAbsoluteTimeGetCurrent() + AT_SCRIPT_TIMEOUT_SEC;
     lua_sethook(L, ATLuaTimeoutHook, LUA_MASKCOUNT, AT_SCRIPT_HOOK_COUNT);
     luaL_newlib(L, ATLuaFuncs);
@@ -960,6 +1016,7 @@ static void ATPlayLuaFile(NSString *scriptPath) {
         ATLog(@"script finished: %@", scriptPath.lastPathComponent);
     }
     gScriptDeadline = 0; // E25-B：本次执行结束，解除时限
+    ATWriteStatus(NO, scriptPath.lastPathComponent); // E26：状态回到空闲
     lua_close(L);
 }
 
@@ -979,6 +1036,16 @@ static void ATHandleCommand(void) {
     NSString *script = cmd[@"script"] ?: @"";
     if (!action.length) return;
     ATLog(@"command: %@ (%@)", action, script);
+
+    // E26：强停。不要求 ATIsSpringBoard —— 任何注入进程收到都先落内存标志，
+    // 但要真正中止脚本只有 SpringBoard 里那个 hook 会读到它。
+    if ([action isEqualToString:@"stop"]) {
+        gStopRequested = 1;
+        [[NSFileManager defaultManager] removeItemAtPath:ATStopFlagPath() error:nil];
+        ATLog(@"stop requested (forced stop)");
+        ATWriteStatus(NO, @"");
+        return;
+    }
 
     if ([action isEqualToString:@"run"]) {
         if (!ATIsSpringBoard()) return;
@@ -1022,7 +1089,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.4 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.5 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }
