@@ -65,6 +65,7 @@
 - **为什么没发现**：包装上了、图标出来了，"能用"掩盖了"不规范"。
 - **R22：deb 布局/maintainer 脚本路径必须以官方实证为准（拆一个官方 roothide 包看真实结构），禁止凭语义推测发明路径前缀；maintainer 脚本里一律用 vroot 路径（/Applications/...），不写 jbroot 真实路径。**
 - 同类附带修正：jbroot 探测的 `/var/mobile/.jbroot-*` 无证据支持，实证位置是 `/var/containers/Bundle/Application/.jbroot-*`（DOBootstrapper.m find_jbroot）。
+- **二次核验（2026-10-24，debug-error-recovery + pc-debugging-expert）**：样本量从 n=1 提升到 n=8（官方源 8 个不同 Section 的 arm64e 包），顶层目录全部为 `Library 152 / Applications 7`，`rootfs` 仅出现在 v0.3.0；`DOBootstrapper.m` L410 还会**主动删除** `/var/jb`（"Remove /var/jb as it might be wrong"），坐实该 symlink 是 Dopamine-roothide 自有行为而非 roothide 通用保证。RED 实测：用 v0.3.1 断言跑 v0.3.0 快照 → 55 PASS / 6 FAIL，R22 五条全部变红，证明断言有效。完整报告见 `docs/AUDIT_ROOTHIDE_E22.md`，取证工具见 `tools/verify_roothide_layout.py`。
 
 ## C. 构建期错误（CI 能抓到，但每条都浪费一轮构建）
 
