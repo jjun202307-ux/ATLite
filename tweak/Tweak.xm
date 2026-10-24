@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.6 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.7 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -322,16 +322,20 @@ static void ATSimulateKey(BOOL down, int usage) {
 #pragma mark - Screen capture (CARenderServer + IOSurface)
 
 typedef struct CF_BRIDGED_TYPE(id) __IOSurface *IOSurfaceRef;
-// R3：真实签名（AutoTouch libATGraphic 反汇编 + ios-mcp 实证，F46/F47）：
-//   IOSurfaceRef CARenderServerCaptureDisplay(uint32_t serverPort=0, CFStringRef displayName, CFDictionaryRef options)
-//   首参 0 = 默认 server（不是指针！），第二参显示屏名 iOS="LCD"（备选 "Main"）
-static IOSurfaceRef (*_AT_CARenderServerCaptureDisplay)(uint32_t, CFStringRef, CFDictionaryRef);
+// E29（AutoTouch 实证对齐）：libATGraphic.iOS15.0.dylib 导入表只含
+// _CARenderServerRenderDisplay —— 由调用方自建 IOSurface 传给 render server 写入，
+// 而非让 render server 分配后返回（v0.3.6 及以前用的旧版抓取 API 无任何实证依据，
+// 且是零文档内部接口，系统级 hang 最大嫌疑）。SO 实证用法：
+//   surface = IOSurfaceCreate(props);            // 调用方自建、自控生命周期
+//   CARenderServerRenderDisplay(0, CFSTR("LCD"), surface, 0, 0);
+static int (*_AT_CARenderServerRenderDisplay)(uint32_t, CFStringRef, IOSurfaceRef, uint32_t, uint32_t);
+static IOSurfaceRef (*_AT_IOSurfaceCreate)(CFDictionaryRef);
 static size_t (*_AT_IOSurfaceGetWidth)(IOSurfaceRef);
 static size_t (*_AT_IOSurfaceGetHeight)(IOSurfaceRef);
 static size_t (*_AT_IOSurfaceGetBytesPerRow)(IOSurfaceRef);
 static uint32_t (*_AT_IOSurfaceGetPixelFormat)(IOSurfaceRef);
 static void * (*_AT_IOSurfaceGetBaseAddress)(IOSurfaceRef);
-// 可选（缺失不阻塞）：读前 Lock/Unlock（AutoTouch 同模式）
+// 渲染前后 Lock/Unlock（AutoTouch/SO 同模式；IOSurfaceCreate 必需，Lock/Unlock 可选）
 static int32_t (*_AT_IOSurfaceLock)(IOSurfaceRef, uint32_t, uint32_t *);
 static void (*_AT_IOSurfaceUnlock)(IOSurfaceRef, uint32_t, uint32_t);
 static BOOL gCaptureReady = NO;
@@ -347,7 +351,8 @@ static void ATLoadCaptureSymbols(void) {
               qc ? "ok" : (eqc ?: "?"), ios ? "ok" : (eios ?: "?"));
         return;
     }
-    _AT_CARenderServerCaptureDisplay = (typeof(_AT_CARenderServerCaptureDisplay))dlsym(qc, "CARenderServerCaptureDisplay");
+    _AT_CARenderServerRenderDisplay = (typeof(_AT_CARenderServerRenderDisplay))dlsym(qc, "CARenderServerRenderDisplay");
+    _AT_IOSurfaceCreate              = (typeof(_AT_IOSurfaceCreate))dlsym(ios, "IOSurfaceCreate");
     _AT_IOSurfaceGetWidth            = (typeof(_AT_IOSurfaceGetWidth))dlsym(ios, "IOSurfaceGetWidth");
     _AT_IOSurfaceGetHeight           = (typeof(_AT_IOSurfaceGetHeight))dlsym(ios, "IOSurfaceGetHeight");
     _AT_IOSurfaceGetBytesPerRow      = (typeof(_AT_IOSurfaceGetBytesPerRow))dlsym(ios, "IOSurfaceGetBytesPerRow");
@@ -355,14 +360,30 @@ static void ATLoadCaptureSymbols(void) {
     _AT_IOSurfaceGetBaseAddress      = (typeof(_AT_IOSurfaceGetBaseAddress))dlsym(ios, "IOSurfaceGetBaseAddress");
     _AT_IOSurfaceLock                = (typeof(_AT_IOSurfaceLock))dlsym(ios, "IOSurfaceLock");
     _AT_IOSurfaceUnlock              = (typeof(_AT_IOSurfaceUnlock))dlsym(ios, "IOSurfaceUnlock");
-    if (!_AT_CARenderServerCaptureDisplay ||
+    if (!_AT_CARenderServerRenderDisplay || !_AT_IOSurfaceCreate ||
         !_AT_IOSurfaceGetWidth || !_AT_IOSurfaceGetHeight || !_AT_IOSurfaceGetBytesPerRow ||
         !_AT_IOSurfaceGetPixelFormat || !_AT_IOSurfaceGetBaseAddress) {
         ATLog(@"CARenderServer/IOSurface symbols incomplete, capture disabled");
         return;
     }
     gCaptureReady = YES;
-    ATLog(@"capture ready: YES (lock: %@)", _AT_IOSurfaceLock ? @"YES" : @"NO");
+    ATLog(@"capture ready: YES (RenderDisplay, lock: %@)", _AT_IOSurfaceLock ? @"YES" : @"NO");
+}
+
+// E29：自建 IOSurface 需要物理像素尺寸。惰性缓存（只取一次）：
+// UIScreen 只能主线程碰 —— 脚本线程首次抓屏时同步派发到主线程取值。
+// 只发生一次（此后走缓存），且此刻渲染队列上没有任何遗留 block，不会构成死锁环。
+static CGSize ATScreenPixelSize(void) {
+    static CGSize px = {0, 0};
+    if (px.width > 0) return px;
+    CGSize (^measure)(void) = ^{
+        UIScreen *s = UIScreen.mainScreen;
+        return CGSizeMake(s.bounds.size.width * s.nativeScale,
+                          s.bounds.size.height * s.nativeScale);
+    };
+    if ([NSThread isMainThread]) px = measure();
+    else dispatch_sync(dispatch_get_main_queue(), ^{ px = measure(); });
+    return px;
 }
 
 typedef struct { uint8_t *rgba; int w, h; } ATBitmap;
@@ -377,18 +398,59 @@ static void ATFreeBitmap(ATBitmap *b) {
 }
 
 // ---------------------------------------------------------------------------
-// E25-A：抓屏看门狗。
-// CARenderServerCaptureDisplay 是到 render server 的**同步 IPC**。一旦 render server
+// E25-A：抓屏看门狗（E29 后保留作纵深防御）。
+// RenderDisplay 仍是到 render server 的**同步 IPC**。一旦 render server
 // 与 SpringBoard 互相等待，这个调用永不返回 —— 而脚本跑在 SpringBoard 进程里，
 // 表现就是"整个系统打不开新程序，只能重启"。
-// 对策：把调用挪到专用串行队列，调用方只等有限时间（1.5s）。超时即认定渲染链路
+// 对策：把渲染挪到专用串行队列，调用方只等有限时间（1.5s）。超时即认定渲染链路
 // 已挂，本进程内**永久停用抓屏**并记日志 —— 宁可功能失效，也不拖垮系统。
-// 注：AutoTouch（稳定运行多年）实证只导入 _CARenderServerRenderDisplay（调用者自带
-// IOSurface），并未使用 CaptureDisplay；本版先加看门狗止血，API 对齐见 ERRORS.md E25。
+// E29：API 已对齐 AutoTouch 实证（_CARenderServerRenderDisplay，调用方自建
+// IOSurface），看门狗从"止血"降级为"保险丝"，正常路径不应再触发。
 // ---------------------------------------------------------------------------
 #define AT_CAPTURE_TIMEOUT_SEC 1.5
 static dispatch_queue_t gCaptureQueue = NULL;
 static BOOL gCaptureBroken = NO;
+
+// 在抓屏队列上执行：自建 IOSurface → RenderDisplay 写入。返回 NULL = 失败。
+// 属性键为 IOSurface 公开文档字符串值；像素格式固定 'ARGB'（SO 实证配方）。
+static IOSurfaceRef ATRenderIntoNewSurface(void) {
+    CGSize px = ATScreenPixelSize();
+    int w = (int)px.width, h = (int)px.height;
+    if (w <= 0 || h <= 0) { ATLog(@"screen pixel size unavailable"); return NULL; }
+    int bpe = 4, pitch = w * 4, alloc = pitch * h;
+    int argb = 0x41524742; // 'ARGB'
+    CFTypeRef keys[7] = {
+        CFSTR("IOSurfaceIsGlobal"), CFSTR("IOSurfaceBytesPerElement"),
+        CFSTR("IOSurfaceBytesPerRow"), CFSTR("IOSurfaceWidth"),
+        CFSTR("IOSurfaceHeight"), CFSTR("IOSurfacePixelFormat"),
+        CFSTR("IOSurfaceAllocSize"),
+    };
+    CFNumberRef nBpe   = CFNumberCreate(NULL, kCFNumberSInt32Type, &bpe);
+    CFNumberRef nPitch = CFNumberCreate(NULL, kCFNumberSInt32Type, &pitch);
+    CFNumberRef nW     = CFNumberCreate(NULL, kCFNumberSInt32Type, &w);
+    CFNumberRef nH     = CFNumberCreate(NULL, kCFNumberSInt32Type, &h);
+    CFNumberRef nFmt   = CFNumberCreate(NULL, kCFNumberSInt32Type, &argb);
+    CFNumberRef nAlloc = CFNumberCreate(NULL, kCFNumberSInt32Type, &alloc);
+    CFTypeRef vals[7] = { kCFBooleanTrue, nBpe, nPitch, nW, nH, nFmt, nAlloc };
+    CFDictionaryRef props = CFDictionaryCreate(NULL, keys, vals, 7,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (nBpe)   CFRelease(nBpe);   if (nPitch) CFRelease(nPitch);
+    if (nW)     CFRelease(nW);     if (nH)     CFRelease(nH);
+    if (nFmt)   CFRelease(nFmt);   if (nAlloc) CFRelease(nAlloc);
+    if (!props) return NULL;
+    IOSurfaceRef s = _AT_IOSurfaceCreate(props);
+    CFRelease(props);
+    if (!s) { ATLog(@"IOSurfaceCreate failed"); return NULL; }
+    if (_AT_IOSurfaceLock) _AT_IOSurfaceLock(s, 0, NULL);
+    int kr = _AT_CARenderServerRenderDisplay(0, CFSTR("LCD"), s, 0, 0);
+    if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 0, 0);
+    if (kr != 0) {
+        ATLog(@"RenderDisplay failed kr=%d", kr);
+        CFRelease(s);
+        return NULL;
+    }
+    return s;
+}
 
 static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) {
     if (gCaptureBroken) return NULL;
@@ -398,8 +460,7 @@ static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) {
     __block IOSurfaceRef s = NULL;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     dispatch_async(gCaptureQueue, ^{
-        s = _AT_CARenderServerCaptureDisplay(0, CFSTR("LCD"), NULL);
-        if (!s) s = _AT_CARenderServerCaptureDisplay(0, CFSTR("Main"), NULL);
+        s = ATRenderIntoNewSurface();
         dispatch_semaphore_signal(sem);
     });
     long r = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW,
@@ -830,7 +891,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.6 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.7 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1127,7 +1188,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.6 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.7 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

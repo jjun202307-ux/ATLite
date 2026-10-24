@@ -67,11 +67,24 @@ def main(root):
     check("R4-E4 hand事件全0参考模式",
           "kIOHIDDigitizerTransducerTypeHand,\n        0, 0, kIOHIDDigitizerEventTouch, 0," in tweak)
 
-    # ---- R3/E3: 抓屏签名 (0, LCD/Main, NULL)；无 CreateServer 残留 ----
-    check("R3-E3 CaptureDisplay(LCD) 在位",
-          '_AT_CARenderServerCaptureDisplay(0, CFSTR("LCD"), NULL)' in tweak)
-    check("R3-E3 CaptureDisplay(Main)回退在位",
-          '_AT_CARenderServerCaptureDisplay(0, CFSTR("Main"), NULL)' in tweak)
+    # ---- R29/E29: 抓屏 API 对齐 AutoTouch 实证（RenderDisplay + 自建 IOSurface）----
+    # 实证：libATGraphic.iOS15.0.dylib 导入表只含 _CARenderServerRenderDisplay；
+    # 旧版内部抓取 API（render server 分配 surface 返回）无任何实证且零文档。
+    check("R29-E29 RenderDisplay 符号声明+dlsym",
+          "_AT_CARenderServerRenderDisplay" in tweak and '"CARenderServerRenderDisplay"' in tweak)
+    check("R29-E29 IOSurfaceCreate 自建表面",
+          "_AT_IOSurfaceCreate" in tweak and '"IOSurfaceCreate"' in tweak)
+    check("R29-E29 RenderDisplay 调用 (0,LCD,surface,0,0)",
+          '_AT_CARenderServerRenderDisplay(0, CFSTR("LCD"), s, 0, 0)' in tweak)
+    check("R29-E29 旧版抓取 API 字样完全消失", "CaptureDisplay" not in tweak)
+    check("R29-E29 自建surface必需属性键",
+          '"IOSurfaceIsGlobal"' in tweak and '"IOSurfaceAllocSize"' in tweak
+          and '"IOSurfacePixelFormat"' in tweak and '"IOSurfaceBytesPerRow"' in tweak)
+    check("R29-E29 渲染前后Lock/Unlock",
+          "_AT_IOSurfaceLock(s, 0, NULL)" in tweak and "_AT_IOSurfaceUnlock(s, 0, 0)" in tweak)
+    check("R29-E29 屏幕像素尺寸惰性缓存(主线程取值)",
+          "ATScreenPixelSize" in tweak and "dispatch_get_main_queue" in tweak)
+    check("R29-E29 RenderDisplay 返回值检查", "kr != 0" in tweak)
     check("R3-E3 无CreateServer残留", "CreateServer" not in tweak)
 
     # ---- R12/E12 + R13/E13: loslib 桩在 CI；精确警告豁免在 Makefile ----
@@ -229,9 +242,9 @@ def main(root):
     check("R23-E23 IP状态行作tableHeaderView（不被遮挡）", "tableHeaderView" in vc_code)
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
-    # V: 版本三处同步 0.3.2
-    check("V 版本0.3.6三处同步",
-          "Version: 0.3.6" in ctrl and "<string>0.3.6</string>" in plist_raw and "v0.3.6" in tweak)
+    # V: 版本三处同步
+    check("V 版本0.3.7三处同步",
+          "Version: 0.3.7" in ctrl and "<string>0.3.7</string>" in plist_raw and "v0.3.7" in tweak)
 
     # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
     logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")

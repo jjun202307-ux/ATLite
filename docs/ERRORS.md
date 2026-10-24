@@ -123,6 +123,14 @@
 - **缺陷 2（旧脚本复活）**：`ATPlayLuaFile` 开头 `ATClearStopFlag()` 会同时把 `gStopRequested` 清零。于是"脚本卡住 → 点停止 → 立刻运行另一个脚本"时，停止信号被新脚本的启动流程清掉，**旧脚本继续跑**。修复：新增 `gRunningScripts` 原子计数 + `ATWaitForPreviousScripts(3s)`（在后台线程先下停止令，再等旧脚本退干净），确认退出后才重置信号。
 - **R28：停止/取消这类"控制信号"的生命周期必须绑定到被控对象，而不是被后续操作顺手重置——引入新任务前，先确认旧任务已退出。另：任何 longjmp 型错误抛出（luaL_error/exception 穿越）都不得发生在 @autoreleasepool 块内。**
 
+### E29. 抓屏 API 选了无实证的内部接口 → 系统级 hang 最大嫌疑（v0.3.7 根治）
+- **现象**：v0.3.4-0.3.6 用 `CARenderServerCaptureDisplay`（render server 分配 IOSurface 返回）。该 API 零文档、无任何参考实现使用；E25 的看门狗只是止血（超时停用），不解决"API 本身行为未知"的根。
+- **取证（三条独立证据链）**：① AutoTouch libATGraphic.iOS15.0.dylib 导入表**只含** `_CARenderServerRenderDisplay`，旧 API 根本不在其中；同库还导入 `dispatch_sync`/`dispatch_semaphore_*`（线程协调同构）。② SO 实证完整用法：调用方 `IOSurfaceCreate` 自建 surface（IsGlobal/BytesPerElement=4/BytesPerRow/Width/Height/PixelFormat='ARGB'/AllocSize）→ Lock → `CARenderServerRenderDisplay(0, CFSTR("LCD"), surface, 0, 0)` → Unlock。③ theapplewiki MIG subsystem 证实 RenderDisplay 是 routine 40209 的高层封装。
+- **修复**：抓屏改为调用方自建 IOSurface + RenderDisplay（`ATRenderIntoNewSurface`），屏幕物理像素经 `ATScreenPixelSize()` 惰性缓存（UIScreen 只能主线程碰，dispatch_sync 主线程取一次）；E25 看门狗保留降级为保险丝。日志改 `capture ready: YES (RenderDisplay, ...)` 以便真机区分新旧版。
+- **R29：私有/ undocumented API 的选型必须有"参考实现在用"的实证（成熟同类产品的导入符号表是最强证据）；零文档接口即使调得通，也只配当最后手段，且必须有看门狗级兜底。新增断言组 R29（含"旧 API 字样完全消失"负向断言），RED 实测 9/9。**
+
+
+
 ## C. 构建期错误（CI 能抓到，但每条都浪费一轮构建）
 
 ### E10. 假设 lua/lua 仓库是 tarball 的 src/ 布局
