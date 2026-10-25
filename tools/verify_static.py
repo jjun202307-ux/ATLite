@@ -256,10 +256,10 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.9三处同步",
-          "Version: 0.3.9" in ctrl and "<string>0.3.9</string>" in plist_raw and "v0.3.9" in tweak)
+    check("V 版本0.3.10三处同步",
+          "Version: 0.3.10" in ctrl and "<string>0.3.10</string>" in plist_raw and "v0.3.10" in tweak)
 
-    # ---- R32: 阶段 0 探针包 v0.3.9（A/B 双模式可行性验证 P1-P5）----
+    # ---- R32: 阶段 0 探针包 v0.3.10（A/B 双模式可行性验证 P1-P5）----
     # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义
     probe_mk   = read(root, "probe/Makefile")
     root_mk    = read(root, "Makefile")
@@ -288,7 +288,7 @@ def main(root):
     check("R32 探针不依赖 SDK 私有类型",
           "ATSurfaceRef" in probe_main and "ATFBConn" in probe_main and "AT_TRANSDUCER_HAND" in probe_main)
     check("R32 探针结果落盘且 mobile 可读",
-          "probe.log" in probe_main and "0666" in probe_main)
+          "probe.log" in probe_main and "0644" in probe_main)
     check("R32 App 侧用 posix_spawn（禁私有 NSTask）",
           "posix_spawn" in app_probe and "NSTask" not in app_probe)
     check("R32 App 侧 P1 标记", "PROBE_P1" in app_probe)
@@ -297,6 +297,38 @@ def main(root):
           "#import <spawn.h>" in tweak and "fcntl.h" in tweak)
     check("R32 日志页有探针入口", "ATLRunProbe" in logvc_raw)
     check("R32 app Makefile FILES 含 ATLProbe.m", "Source/ATLProbe.m" in app_mk)
+
+    # ---- R33: debug-error-recovery 复查 v0.3.10 探针包发现的缺陷 ----
+    # A 假阳性：probe.log 是 append 模式，用 containsString 在**全文件**上判
+    #           "from=springboard"，第二次点击会命中上一次的历史残留 →
+    #           本次 P2 尚未落盘就被判定完成，显示旧结论。必须按字节偏移切分。
+    check("R33-A probe.log 按偏移切分（禁全文件 containsString 判完成）",
+          "startLen" in logvc_raw and "subdataWithRange" in logvc_raw
+          and "NSMakeRange(startLen" in logvc_raw)
+    # B SpringBoard 侧 spawn 不传 --w/--h，回退 RenderDisplay 用硬编码 1170x2532，
+    #   非该分辨率机型必失败 → 误判"P5 双失败"，污染阶段 2 决策。需自动重试多个尺寸。
+    check("R33-B probe 回退多分辨率重试（不依赖调用方传尺寸）",
+          "kATFallbackSizes" in probe_main
+          and "AT_TRY_SIZES" in probe_main)
+    # C SpringBoard 内 spawn 从不 waitpid → 每点一次留一个僵尸进程挂在 SpringBoard 名下
+    #   （常驻进程，不会自动 reap）。用 DISPATCH_SOURCE_TYPE_PROC 异步回收，零阻塞。
+    check("R33-C SpringBoard 侧回收子进程（禁 spawn 后不 reap）",
+          "DISPATCH_SOURCE_TYPE_PROC" in tweak and "DISPATCH_PROC_EXIT" in tweak)
+    # D GetHeight 未判空：与其同 framework 的 GetWidth 判了它没判 →
+    #   空函数指针调用 = EXC_BAD_ACCESS = 探针崩溃 = P5 全量结论丢失（含回退路径）
+    check("R33-D probe 抓屏读数三个符号全部判空",
+          "_ATSurfaceGetWidth && _ATSurfaceGetHeight" in probe_main)
+    # E App 读 probe.log 只用 ATLLogsDir()（单侧推导），而 tweak.log 早已用
+    #   ATLLogCandidatePaths() 多路径探测；两侧 jbroot 推导不同时 P2 部分读不到
+    check("R33-E probe.log 读取用多路径探测（与 tweak.log 同机制）",
+          "ATLProbeLogPath" in logvc_raw or "probeLogPath" in logvc_raw)
+    # F App 侧阻塞 read(fds[0]) 无超时：若 probe 卡在 RenderDisplay 同步 IPC
+    #   （正是 E25/E30 担心的死锁场景），后台线程永久阻塞且无法取消。违反 R30。
+    check("R33-F App 侧读子进程输出带超时并可 kill",
+          "select(" in app_probe and "AT_PROBE_READ_TIMEOUT" in app_probe
+          and "SIGKILL" in app_probe)
+    # G probe.log 0666 让任意进程可写，诊断日志只需 mobile 可读 → 0644 足够
+    check("R33-G probe.log 权限收紧至 0644", "0644" in probe_main)
 
     # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
     logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")

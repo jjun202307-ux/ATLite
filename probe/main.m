@@ -1,4 +1,4 @@
-// ATLiteProbe v0.3.9 —— 阶段 0 诊断探针（纯新增，不改现有任何行为）
+// ATLiteProbe v0.3.10 —— 阶段 0 诊断探针（纯新增，不改现有任何行为）
 //
 // 只回答 docs/PLAN_P0_DAEMON.md §7 的 P3 / P4 / P5：
 //   P3 root 身份：spawn 出来的进程 geteuid() 是不是 0（setuid 是否生效）
@@ -126,6 +126,42 @@ static int32_t (*_ATSurfaceLock)(ATSurfaceRef, uint32_t, uint32_t *);
 static void (*_ATSurfaceUnlock)(ATSurfaceRef, uint32_t, uint32_t);
 static int (*_ATRenderDisplay)(uint32_t, CFStringRef, ATSurfaceRef, uint32_t, uint32_t);
 
+// R33-B：常见 iPhone 物理像素尺寸表。SpringBoard 侧 spawn 时不方便取 UIScreen
+// （要跳主线程，得再套一层 E30 超时），所以这里不依赖调用方传尺寸：
+// 单一硬编码分辨率会让非该分辨率的机型**必然**失败，从而把 "BOTH-FAILED"
+// 误报给阶段 2 的决策依据。逐个尝试，命中即止。
+static const int kATFallbackSizes[][2] = {
+    {1170, 2532}, {1179, 2556}, {1284, 2778}, {1290, 2796}, {1080, 2400},
+    {828, 1792}, {750, 1334}, {640, 1136}, {1125, 2436}, {1242, 2688},
+    {1668, 2388}
+};
+#define AT_TRY_SIZES ((size_t)(sizeof(kATFallbackSizes) / sizeof(kATFallbackSizes[0])))
+
+// 单次 RenderDisplay 尝试；kr==0 即成功（调用方自建 IOSurface，AutoTouch 实证路径）
+static BOOL ATRenderOne(int w, int h) {
+    if (w <= 0 || h <= 0) return NO;
+    uint32_t argb = 0x41524742u; // 'ARGB'
+    NSDictionary *props = @{
+        @"IOSurfaceIsGlobal":        @YES,
+        @"IOSurfaceBytesPerElement": @4,
+        @"IOSurfaceBytesPerRow":     @(w * 4),
+        @"IOSurfaceWidth":           @(w),
+        @"IOSurfaceHeight":          @(h),
+        @"IOSurfacePixelFormat":     @(argb),
+        @"IOSurfaceAllocSize":       @(w * h * 4),
+    };
+    ATSurfaceRef sf = _ATSurfaceCreate((__bridge CFDictionaryRef)props);
+    if (!sf) { P(@"PROBE_P5 RenderDisplay %dx%d surface=NULL", w, h); return NO; }
+    uint32_t seed = 0;
+    if (_ATSurfaceLock) _ATSurfaceLock(sf, 0, &seed);
+    int krr = _ATRenderDisplay(0, CFSTR("LCD"), sf, 0, 0);
+    uint8_t *p = (krr == 0 && _ATSurfaceGetBase) ? (uint8_t *)_ATSurfaceGetBase(sf) : NULL;
+    P(@"PROBE_P5 RenderDisplay %dx%d kr=%d first_pixel=%02x%02x%02x%02x",
+      w, h, krr, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, p ? p[3] : 0);
+    if (_ATSurfaceUnlock) _ATSurfaceUnlock(sf, 0, seed);
+    return krr == 0;
+}
+
 static void probe_framebuffer(int reqW, int reqH) {
     void *fb  = dlopen("/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer", RTLD_NOW);
     void *ios = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_NOW);
@@ -152,7 +188,9 @@ static void probe_framebuffer(int reqW, int reqH) {
         ATSurfaceRef s = NULL;
         int kr2 = _ATFBGetLayerDefaultSurface(conn, 0, &s);
         P(@"PROBE_P5 GetLayerDefaultSurface kr=%d surface=%@", kr2, s ? @"ok" : @"NULL");
-        if (kr2 == 0 && s && _ATSurfaceGetBase && _ATSurfaceGetWidth) {
+        // R33-D：三个读数符号必须全部判空。GetWidth 判了而 GetHeight 没判 →
+        // 空函数指针调用 = EXC_BAD_ACCESS = 探针崩溃 = P5 全量结论连回退一起丢
+        if (kr2 == 0 && s && _ATSurfaceGetBase && _ATSurfaceGetWidth && _ATSurfaceGetHeight) {
             size_t w = _ATSurfaceGetWidth(s), h = _ATSurfaceGetHeight(s);
             uint32_t seed = 0;
             if (_ATSurfaceLock) _ATSurfaceLock(s, 0, &seed);
@@ -173,30 +211,19 @@ static void probe_framebuffer(int reqW, int reqH) {
           _ATSurfaceCreate ? @"ok" : @"NULL", _ATRenderDisplay ? @"ok" : @"NULL");
         return;
     }
-    int w = reqW > 0 ? reqW : 1170, h = reqH > 0 ? reqH : 2532;
-    uint32_t argb = 0x41524742u; // 'ARGB'
-    CFDictionaryRef props = (__bridge CFDictionaryRef)@{
-        @"IOSurfaceIsGlobal":        @YES,
-        @"IOSurfaceBytesPerElement": @4,
-        @"IOSurfaceBytesPerRow":     @(w * 4),
-        @"IOSurfaceWidth":           @(w),
-        @"IOSurfaceHeight":          @(h),
-        @"IOSurfacePixelFormat":     @(argb),
-        @"IOSurfaceAllocSize":       @(w * h * 4),
-    };
-    ATSurfaceRef s = _ATSurfaceCreate(props);
-    if (!s) { P(@"PROBE_P5 FAIL surface create NULL"); return; }
-    uint32_t seed = 0;
-    if (_ATSurfaceLock) _ATSurfaceLock(s, 0, &seed);
-    int krr = _ATRenderDisplay(0, CFSTR("LCD"), s, 0, 0);
-    uint8_t *p = krr == 0 && _ATSurfaceGetBase ? (uint8_t *)_ATSurfaceGetBase(s) : NULL;
-    P(@"PROBE_P5 fallback RenderDisplay kr=%d %zux%zu first_pixel=%02x%02x%02x%02x",
-      krr,
-      _ATSurfaceGetWidth  ? _ATSurfaceGetWidth(s)  : 0,
-      _ATSurfaceGetHeight ? _ATSurfaceGetHeight(s) : 0,
-      p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, p ? p[3] : 0);
-    if (_ATSurfaceUnlock) _ATSurfaceUnlock(s, 0, seed);
-    P(@"PROBE_P5 verdict=%@", krr == 0 ? @"FALLBACK-RENDERDISPLAY-OK" : @"BOTH-FAILED");
+    // 优先用调用方给的真实分辨率（App 侧会传 nativeBounds）
+    if (reqW > 0 && reqH > 0 && ATRenderOne(reqW, reqH)) {
+        P(@"PROBE_P5 verdict=FALLBACK-RENDERDISPLAY-OK (size from caller %dx%d)", reqW, reqH);
+        return;
+    }
+    for (size_t i = 0; i < AT_TRY_SIZES; i++) {
+        if (ATRenderOne(kATFallbackSizes[i][0], kATFallbackSizes[i][1])) {
+            P(@"PROBE_P5 verdict=FALLBACK-RENDERDISPLAY-OK (auto size %dx%d, index=%zu)",
+              kATFallbackSizes[i][0], kATFallbackSizes[i][1], i);
+            return;
+        }
+    }
+    P(@"PROBE_P5 verdict=BOTH-FAILED");
 }
 
 #pragma mark - main
@@ -221,9 +248,10 @@ int main(int argc, char **argv) {
                                   withIntermediateDirectories:YES attributes:nil error:nil];
         NSString *logPath = [logs stringByAppendingPathComponent:@"probe.log"];
         gOut = fopen(logPath.fileSystemRepresentation, "a");
-        if (gOut) chmod(logPath.fileSystemRepresentation, 0666); // root 写 → mobile 可读
+        // R33-G：root 拥有 + 0644 让 mobile 可读即可；0666 额外开放了"任意进程可写"，无必要
+        if (gOut) chmod(logPath.fileSystemRepresentation, 0644);
 
-        P(@"=== ATLiteProbe v0.3.9 begin (from=%@) ===", from);
+        P(@"=== ATLiteProbe v0.3.10 begin (from=%@) ===", from);
         probe_identity();
         probe_hid();
         probe_framebuffer(w, h);

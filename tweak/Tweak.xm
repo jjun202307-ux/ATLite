@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.9 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.10 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -24,6 +24,8 @@
 #import <time.h>
 #import <spawn.h>
 #include <fcntl.h>
+// R33-C：waitpid 的声明所在；缺失 = 隐式函数声明 = clang 14+ 硬错误（E27/R27 同类）
+#include <sys/wait.h>
 #import <math.h>
 #import <stdlib.h>
 
@@ -907,7 +909,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.9 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.10 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1138,6 +1140,33 @@ static BOOL ATIsSpringBoard(void) {
     return [[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"];
 }
 
+// R33-C：spawn 出去的子进程退出后必须回收，否则变僵尸挂在常驻的 SpringBoard 名下，
+// 而 SpringBoard 不会替我们 reap —— 每点一次探针就多一个僵尸，累积泄漏 pid 表。
+// 用 dispatch PROC source 在子进程退出时异步回收：不阻塞任何线程。
+// source 必须被强引用持有（ARC 下局部变量一出作用域就被释放，收不到事件）。
+static dispatch_queue_t ATReapQueue(void) {
+    static dispatch_queue_t q = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ q = dispatch_queue_create("me.atlite.reap", DISPATCH_QUEUE_SERIAL); });
+    return q;
+}
+static void ATReapChildAsync(pid_t pid) {
+    if (pid <= 0) return;
+    // 让 source 自己持有自己（handler 捕获 src），事件到达后 src = NULL 打破环。
+    // 不借助 NSMutableSet/NSArray 装 dispatch object —— 那要求 dispatch_source_t
+    // 恰好是 ObjC 类型（受 OS_OBJECT_USE_OBJC 影响），属于不必要的编译期假设。
+    __block dispatch_source_t src =
+        dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)pid,
+                               DISPATCH_PROC_EXIT, ATReapQueue());
+    dispatch_source_set_event_handler(src, ^{
+        int st = 0;
+        waitpid(pid, &st, WNOHANG); // 子进程已退出，立即返回，不阻塞
+        dispatch_source_cancel(src);
+        src = NULL;                 // 打破 retain cycle
+    });
+    dispatch_resume(src);
+}
+
 // P2（阶段 0 探针）：SpringBoard 内能否 posix_spawn —— 这是 B 模式保活唯一的悬空点。
 // 与 App 侧共用同一份二进制；stdout 交给探针自己写 probe.log，这里只关心 rc/errno。
 static void ATProbeSpawnFromSpringBoard(void) {
@@ -1156,6 +1185,7 @@ static void ATProbeSpawnFromSpringBoard(void) {
     posix_spawn_file_actions_destroy(&fa);
     ATLog(@"PROBE_P2 spawn rc=%d errno=%d exec=%@ pid=%d path=%@",
           rc, rc, [fm isExecutableFileAtPath:exe] ? @"YES" : @"NO", pid, exe);
+    ATReapChildAsync(rc == 0 ? pid : 0); // R33-C：异步回收，不阻塞调用线程
 }
 
 static void ATHandleCommand(void) {
@@ -1233,7 +1263,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.9 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.10 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

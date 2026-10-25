@@ -203,3 +203,57 @@
 | R15/R16 | 每个 .m 导入清单逐文件核对；struct 关键字 | ☐ |
 | R17 | Extensions.lua v2 版本感知 | ☐ |
 | R18/R19/R20 | 推送前静态清单全过 + workflow 保留 set -x/断言 | ☐ |
+
+---
+
+### E31：阶段 0 探针包 v0.3.9 —— 用一次构建打掉 A/B 双模式的悬空点
+
+**背景**：触动精灵架构分析（§9.3 实证：TSDaemon 是独立 setuid-root 进程，tweak 不做 Hook）指出我们"脚本跑在 SpringBoard"是架构级根因，E25/E26/E29/E30 都在给它擦屁股。确定要做 P0 重构后，卡在两个从未验证过的前提上：App（A 模式）与 SpringBoard（B 模式）到底能不能 spawn 一个 setuid-root 二进制，以及拿到 root 后 HID / 抓屏是否可用。
+
+**做法**（`docs/BUILD_PLAN_v0.3.9_probe.md`，superpowers 方法，TDD 顺序）：
+1. **T1 先写 R32 断言组 17 条**，跑出全 FAIL（RED 实测，证明断言有效），才允许写代码。
+2. 新增 `probe/`（theos `tool.mk`，`ATLiteProbe_INSTALL_PATH = /Applications/ATLite.app`），回答 P3（euid）/ P4（HID）/ P5（Framebuffer 主 + RenderDisplay 回退）。
+3. P1 由 App（posix_spawn + pipe，禁私有 NSTask）回答，P2 由 tweak（现有 command.json 通道加 `probe` action）回答；两侧spawn 同一个二进制，结果统一 append 进 `probe.log`（chmod 0666 让 mobile 可读）。**App 一次点击即返回全部五项。**
+
+**验证链**：静态套件 **120 PASS / 0 FAIL**（103 原有 + 17 R32）→ CI run#40192241385 **一次通过** → 产物验收 17 项全过 + deb 内探针位于 `Applications/ATLite.app/ATLiteProbe`、postinst 走 vroot 路径 `chmod u+s`、二进制字符串双编码补验全 PASS → 局域网 HTTP 200（147442 字节）。
+
+**本轮在推送前抓出、并按"不是等问题发生而是提前排除"处理的四个点**（这正是 R18 铁律想要的效果）：
+
+| 发现于 | 问题 | 后果（若不处理） |
+|---|---|---|
+| 写计划时 grep | `tools/verify_static.py` 的 `read()` 是**双参数** `read(root, rel)` | 断言脚本 TypeError，套件整个跑不起来 |
+| 写计划时 grep | **`tweak/Tweak.xm` 没有 `<spawn.h>` 也没有 `<fcntl.h>`** | `posix_spawn` / `O_WRONLY` 未声明，编译直接失败（E27 同款） |
+| 计划评审 | `@(argv[i+1])` 对 `char*` 做标量 boxing | clang 不支持，编译失败；改用 `stringWithUTF8String:` |
+| 实现后自查 | `probe/main.m` 用 `atoi` 却没 `<stdlib.h>` | clang 14+ 隐式函数声明是硬错误，编译失败 |
+
+另外 CI 原本有两个长期隐患（这次一并修掉）：`Build package` 步骤**没有 `set -x`**、**从没跑过静态断言**。现补 `Static assertions` 独立步骤 + staging 内 `ATLiteProbe` 就位断言，让"断言不过"和"编译不过"在日志里成为可区分的两件事。
+
+- **R31：新增命令/子工程时，先 grep 现有工具脚本的真实函数签名与目标文件的 import 清单，而不是照记忆写。**
+- **R32：写进计划的每一行代码，都要假设执行者没有任何项目上下文——可粘贴、且已被本地核验过。** 若某个 API 的存在性依赖记忆（私有头、errno 常量、构建变量），先在源码里 grep 到实证，否则用自定义名规避（本探针的 `ATSurfaceRef` / `ATFBConn` / `AT_TRANSDUCER_HAND` / `AT_EV_*` 即为此）。
+
+### E33：debug-error-recovery 复查 v0.3.9 探针包 —— 7 个缺陷（附件 E33-A~G，v0.3.10）
+
+**发现方式**：对上一版刚交付、尚未真机验证的探针包做系统性审查。审查对象不是"有没有报错"，而是"**如果这一版真机跑完，我们能否相信它的输出**"。
+
+**结论：不能。** 其中最严重的一条会让 P2（B 模式命脉）显示上一次的旧数据。
+
+| 编号 | 缺陷 | 后果 |
+|---|---|---|
+| **E33-A** | `probe.log` 是 append 模式，却用 `containsString:@"from=springboard"` 在**全文件**上判断 SpringBoard 那次是否完成 | 第二次点击立刻命中历史残留 → 判定完成 → 展示**上一次**的 P2。归因完全错位，且看不出来 |
+| E33-B | SpringBoard 侧 spawn 不传 `--w/--h`，回退 RenderDisplay 硬编码 1170×2532 | 非该分辨率机型必失败 → 误报 `BOTH-FAILED`，污染阶段 2 的抓屏方案决策 |
+| E33-C | SpringBoard 内 `posix_spawn` 后从不 `waitpid` | 探针退出后变僵尸，挂在常驻的 SpringBoard 名下无人回收，点一次多一个 |
+| E33-D | `_ATSurfaceGetWidth` 判了空，`_ATSurfaceGetHeight` 没判 | 空函数指针调用 → EXC_BAD_ACCESS → 探针崩溃 → P5 结论连回退路径一起丢失 |
+| E33-E | App 读 `probe.log` 只用 `ATLLogsDir()`（单侧推导），而 `tweak.log` 早已用 `ATLLogCandidatePaths()` 多路径探测 | 两侧 jbroot 推导不同时，SpringBoard 那份读不到，P2 静默消失且不报错 |
+| E33-F | App 侧阻塞 `read(fds[0])` 无超时 | 探针若卡在 RenderServer 同步 IPC（E25/E30 同款死锁场景），本线程永久阻塞且无法取消。**直接违反 R30 铁律** |
+| E33-G | `probe.log` 权限 0666 | 多开放了"任意进程可写"，诊断日志只需 mobile 可读，0644 足够 |
+
+**同时排除的三个怀疑**（避免误改正确代码，这一步与找缺陷同等重要）：
+
+- **HID 参数 ABI**：`IOHIDEventCreateDigitizerFingerEvent` 是否真为 13 参、`Boolean range, Boolean touch, IOOptionBits options` —— 查 iphoneheaders 的 `IOKit/hid/IOHIDEvent.h` 原始私有头，**逐字一致**；`CreateDigitizerEvent` 15 参同样一致。ARM64 AAPCS64 下不存在寄存器错位。
+- **HID field 常量**：`MajorRadius`/`MinorRadius`/`IsDisplayIntegrated` = `0x000B0014/0x000B0015/0x000B0019` —— rpcclient 的 `IOHIDEventFieldDigitizer` 枚举给出十进制 720916/720917/720921，**完全吻合**。（此前按公开头主观推算得到 0x11/0x12/0x14，是错的：枚举中间有多态 field。）
+- **暗色模式可读性**：日志页硬编码 `blackColor`，一度怀疑深底黑字不可读。实际父 view 强制 `whiteColor` 且 UITextView 背景透明 → 白底黑字恒可读，降级为体验项而非缺陷。
+
+**修复**：日志页按**字节偏移**只判断本次新增段（A）；探针回退自动遍历 11 组常见分辨率（B）；SpringBoard 侧用 `DISPATCH_SOURCE_TYPE_PROC` 异步回收且不依赖 `OS_OBJECT_USE_OBJC`（C）；读数三符号全部判空（D）；probe.log 复用多路径探测（E）；App 侧改 `select`  deadlines 8s + 超时 kill 并输出"卡在哪之前"的判读提示（F）；权限收 0644（G）。
+
+- **R33：诊断/埋点代码的输出可靠性要按"数据管道"审查，而不是按"功能代码"审查。** 三类必查：① 用 `append` 落盘却用存在性判断完成 → 必然读到历史（改用偏移/会话 id）；② 多进程写同一份数据 → 每一侧的路径推导都要分别证明同源；③ 任何跨进程等待（含 `read`／`waitpid`）一律套 R30 的截止时间，超时必须能 kill 掉对端。
+- **R34：审查时要把"被证伪的怀疑"一并归档。** 上面三条排除项若不留证据，下一轮审查会重新查一遍；而手工推算出的错误值正是典型反例 —— **私有枚举必须查枚举本身，不能按某一版头文件的字段顺序推算**：中间可能插入多态 field 导致序号整体平移（`MajorRadius` 实测 `0x000B0014`，按公开头顺序推算却是 `0x000B0011`）。

@@ -92,30 +92,60 @@
     [self reload];
 }
 
+// R33-E：probe.log 由两个不同进程写（App 侧自己 spawn 的那次 + SpringBoard 侧那次），
+// 两者推导 jbroot 的链路不同（bundlePath vs dladdr）。tweak.log 早已用候选路径探测
+// 来容忍这个差异，probe.log 必须同样处理，否则 SpringBoard 那份永远读不到，
+// P2（B 模式的命脉）会静默丢失且不报错。
+- (NSString *)probeLogPath {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *p = [ATLLogsDir() stringByAppendingPathComponent:@"probe.log"];
+    if ([fm fileExistsAtPath:p]) return p;
+    for (NSString *c in ATLLogCandidatePaths()) {
+        NSString *q = [[c stringByDeletingLastPathComponent]
+                       stringByAppendingPathComponent:@"probe.log"];
+        if ([fm fileExistsAtPath:q]) return q;
+    }
+    return p; // 都还不存在时回落到首选路径，让"从未生成过"这件事能显示出来
+}
+
 // 阶段 0 探针（P1/P3/P4/P5）：Runner 输出与 probe.log 一起显示，便于一次复制回报
 - (void)runProbe {
     if (self.timer) [self stopTimer];   // 自动刷新会覆盖结果，先停
     self.text.text = @"正在运行诊断探针…";
+    NSString *logPath = [self probeLogPath];
+    NSUInteger startLen = [[NSData dataWithContentsOfFile:logPath] length];
     // 一次点击拿全 P1+P2+P3+P4+P5：
     //   P1/P3/P4/P5 = App 侧 spawn，stdout 直接捕获
     //   P2          = 经现有命令通道让 SpringBoard 侧再 spawn 一次（结果同样进 probe.log）
     ATLSendCommand(@"probe", nil);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *out = ATLRunProbe(@"app");
-        NSString *logPath = [ATLLogsDir() stringByAppendingPathComponent:@"probe.log"];
-        // 探针以 append 模式写 probe.log，等 SpringBoard 那次也落盘后一并读取
-        for (int i = 0; i < 30; i++) {
+        // R33-A：probe.log 是 append 模式，历史内容里早已存在 "from=springboard"。
+        // 若在全文件上做 containsString，第二次点击会立刻命中上一次的残留、
+        // 判定"已完成"，然后展示旧结论。下面只在"本次点击之后新增的那一段"里判断。
+        NSString *fresh = @"";
+        for (int i = 0; i < 40; i++) {
             NSData *d = [NSData dataWithContentsOfFile:logPath];
-            NSString *s = d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : nil;
-            if (s && [s containsString:@"from=springboard"]) break;
+            if (d && d.length > startLen) {
+                NSRange r = NSMakeRange(startLen, d.length - startLen);
+                NSString *tail = [[NSString alloc] initWithData:[d subdataWithRange:r]
+                                                       encoding:NSUTF8StringEncoding];
+                if (tail && [tail containsString:@"from=springboard"]) { fresh = tail; break; }
+            }
             [NSThread sleepForTimeInterval:0.2];
         }
-        NSData *d = [NSData dataWithContentsOfFile:logPath];
-        NSString *file = d ? ([[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"")
-                           : @"";
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.text.text = [NSString stringWithFormat:@"%@\n\n---- probe.log ----\n%@",
-                              out, file.length ? file : @"（无）"];
+            NSString *sb;
+            if (fresh.length) {
+                sb = fresh;
+            } else {
+                sb = @"（SpringBoard 侧本次没有写入 probe.log）\n"
+                     @"可能原因：tweak 未注入 SpringBoard / 命令未送达 / "
+                     @"两侧 jbroot 推导不一致。对照下方路径与 tweak.log 的诊断信息判断。";
+            }
+            self.text.text = [NSString stringWithFormat:
+                              @"%@\n\n---- probe.log（本次新增部分）----\n%@\n\n路径: %@",
+                              out, sb, logPath];
             self.text.textColor = [UIColor blackColor];
             self.pathLabel.text = @"诊断探针结果（自动刷新已暂停，点『自动刷新』恢复）";
         });

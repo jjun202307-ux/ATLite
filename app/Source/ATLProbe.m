@@ -7,6 +7,15 @@
 #import <errno.h>
 #import <stdlib.h>
 #import <string.h>
+#import <signal.h>
+#import <sys/select.h>
+#import <mach/mach_time.h>
+
+// R33-F：读子进程输出的整体上限。探针做的事（dlopen + 一次 touch + 抓屏）
+// 正常几百毫秒完成；卡住的最可能原因正是 RenderDisplay/RenderServer 的同步 IPC
+// （E25/E30 同款死锁场景）。R30 铁律：凡跨线程、跨进程的同步等待都必须有超时。
+// 超时后 kill 子进程并带着已读到的部分返回，绝不让本线程永久阻塞。
+#define AT_PROBE_READ_TIMEOUT_SEC 8.0
 
 // P1：App（mobile, no-sandbox, platform-application）能否 spawn app bundle 内的二进制。
 // 三个判据缺一不可：文件是否存在 / 是否可执行 / posix_spawn 的 rc 与 errno。
@@ -54,13 +63,55 @@ NSString *ATLRunProbe(NSString *from) {
     }
 
     NSMutableData *buf = [NSMutableData data];
-    char tmp[4096]; ssize_t n;
-    while ((n = read(fds[0], tmp, sizeof tmp)) > 0) [buf appendBytes:tmp length:(NSUInteger)n];
+    char tmp[4096];
+    BOOL timedOut = NO;
+    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + AT_PROBE_READ_TIMEOUT_SEC;
+    for (;;) {
+        CFAbsoluteTime left = deadline - CFAbsoluteTimeGetCurrent();
+        if (left <= 0) { timedOut = YES; break; }
+        struct timeval tv;
+        tv.tv_sec = (long)left;
+        tv.tv_usec = (suseconds_t)((left - (double)tv.tv_sec) * 1000000.0);
+        fd_set rd;
+        FD_ZERO(&rd);
+        FD_SET(fds[0], &rd);
+        int sel = select(fds[0] + 1, &rd, NULL, NULL, &tv);
+        if (sel < 0) { if (errno == EINTR) continue; break; }
+        if (sel == 0) { timedOut = YES; break; }
+        ssize_t n = read(fds[0], tmp, sizeof tmp);
+        if (n > 0) { [buf appendBytes:tmp length:(NSUInteger)n]; continue; }
+        break; // 0 = EOF（子进程关了 stdout），<0 = 读错
+    }
     close(fds[0]);
-    int status = 0; waitpid(pid, &status, 0);
 
-    NSString *out = [[NSString alloc] initWithData:buf encoding:NSUTF8StringEncoding] ?: @"";
-    return [NSString stringWithFormat:
-            @"PROBE_P1 spawn OK (pid=%d, status=%d, exec=%@, base=%@, screen=%@x%@)\n%@",
-            pid, status, execOK ? @"YES" : @"NO", base, wStr, hStr, out];
+    NSString *partialOut = [[NSString alloc] initWithData:buf encoding:NSUTF8StringEncoding] ?: @"";
+    NSString *head = [NSString stringWithFormat:
+                      @"PROBE_P1 spawn OK (pid=%d, exec=%@, base=%@, screen=%@x%@)\n",
+                      pid, execOK ? @"YES" : @"NO", base, wStr, hStr];
+
+    if (timedOut) {
+        // 到点仍无新数据：探针大概率卡在某次同步 IPC 上。这正是需要知道的证据，
+        // 但本线程绝不能陪它一起挂 —— kill 后带着已读到的部分返回。
+        kill(pid, SIGKILL);
+        int st = 0; waitpid(pid, &st, 0);
+        return [NSString stringWithFormat:
+                @"%@PROBE_P1 TIMEOUT after %.0fs — 已 kill(pid=%d)\n"
+                @"判读：探针卡在某次同步调用里没返回。跑完 P3 之前卡住=spawn/exec 问题；"
+                @"跑完 P3 之后卡住=P4/P5 的同步 IPC 不可用（这本身就是 P5 的结论：该 API 本机不能用）。\n"
+                @"卡住前已读到的输出：\n%@",
+                head, AT_PROBE_READ_TIMEOUT_SEC, pid, partialOut];
+    }
+
+    int status = 0;
+    CFAbsoluteTime waitDeadline = CFAbsoluteTimeGetCurrent() + 2.0;
+    while (waitpid(pid, &status, WNOHANG) == 0) {
+        if (CFAbsoluteTimeGetCurrent() > waitDeadline) {
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            break;
+        }
+        usleep(50000);
+    }
+    return [NSString stringWithFormat:@"%@PROBE_P1 status=%d\n%@",
+            head, status, partialOut];
 }
