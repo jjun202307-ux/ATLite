@@ -1,6 +1,7 @@
 #import "ATLLogViewController.h"
 #import "ATLPaths.h"
 #import "ATLCommand.h"
+#import "ATLProbe.h"
 
 // E24：日志查看页。职责：
 //  1) 显示 <jbroot>/var/mobile/Library/ATLite/logs/tweak.log（多路径探测，容忍 jbroot 推导差异）
@@ -46,6 +47,8 @@
     stopItem.tintColor = [UIColor systemRedColor];
     [self setToolbarItems:@[
         stopItem,
+        [[UIBarButtonItem alloc] initWithTitle:@"诊断探针" style:UIBarButtonItemStylePlain
+                                        target:self action:@selector(runProbe)],
         [[UIBarButtonItem alloc] initWithTitle:@"清空" style:UIBarButtonItemStylePlain
                                         target:self action:@selector(clearLog)],
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil],
@@ -87,6 +90,36 @@
 - (void)stopScript {
     ATLSendStop(); // E26 双通道
     [self reload];
+}
+
+// 阶段 0 探针（P1/P3/P4/P5）：Runner 输出与 probe.log 一起显示，便于一次复制回报
+- (void)runProbe {
+    if (self.timer) [self stopTimer];   // 自动刷新会覆盖结果，先停
+    self.text.text = @"正在运行诊断探针…";
+    // 一次点击拿全 P1+P2+P3+P4+P5：
+    //   P1/P3/P4/P5 = App 侧 spawn，stdout 直接捕获
+    //   P2          = 经现有命令通道让 SpringBoard 侧再 spawn 一次（结果同样进 probe.log）
+    ATLSendCommand(@"probe", nil);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *out = ATLRunProbe(@"app");
+        NSString *logPath = [ATLLogsDir() stringByAppendingPathComponent:@"probe.log"];
+        // 探针以 append 模式写 probe.log，等 SpringBoard 那次也落盘后一并读取
+        for (int i = 0; i < 30; i++) {
+            NSData *d = [NSData dataWithContentsOfFile:logPath];
+            NSString *s = d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : nil;
+            if (s && [s containsString:@"from=springboard"]) break;
+            [NSThread sleepForTimeInterval:0.2];
+        }
+        NSData *d = [NSData dataWithContentsOfFile:logPath];
+        NSString *file = d ? ([[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"")
+                           : @"";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.text.text = [NSString stringWithFormat:@"%@\n\n---- probe.log ----\n%@",
+                              out, file.length ? file : @"（无）"];
+            self.text.textColor = [UIColor blackColor];
+            self.pathLabel.text = @"诊断探针结果（自动刷新已暂停，点『自动刷新』恢复）";
+        });
+    });
 }
 
 // 运行状态（tweak 写 status.json）：让"到底还在不在跑"不再是猜的

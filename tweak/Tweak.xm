@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.8 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.9 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -22,6 +22,8 @@
 #import <mach/mach_time.h>
 #import <sys/stat.h>
 #import <time.h>
+#import <spawn.h>
+#include <fcntl.h>
 #import <math.h>
 #import <stdlib.h>
 
@@ -905,7 +907,7 @@ static int l_findText(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.8 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.9 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1136,6 +1138,26 @@ static BOOL ATIsSpringBoard(void) {
     return [[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"];
 }
 
+// P2（阶段 0 探针）：SpringBoard 内能否 posix_spawn —— 这是 B 模式保活唯一的悬空点。
+// 与 App 侧共用同一份二进制；stdout 交给探针自己写 probe.log，这里只关心 rc/errno。
+static void ATProbeSpawnFromSpringBoard(void) {
+    NSString *exe = [[NSBundle mainBundle].bundlePath
+                     stringByAppendingPathComponent:@"ATLiteProbe"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:exe]) { ATLog(@"PROBE_P2 FAIL 二进制缺失: %@", exe); return; }
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    char *argv[] = { (char *)"ATLiteProbe",
+                     (char *)"--base", (char *)ATBaseDir().UTF8String,
+                     (char *)"--from", (char *)"springboard", NULL };
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, exe.fileSystemRepresentation, &fa, NULL, argv, NULL);
+    posix_spawn_file_actions_destroy(&fa);
+    ATLog(@"PROBE_P2 spawn rc=%d errno=%d exec=%@ pid=%d path=%@",
+          rc, rc, [fm isExecutableFileAtPath:exe] ? @"YES" : @"NO", pid, exe);
+}
+
 static void ATHandleCommand(void) {
     NSString *cmdPath = [ATBaseDir() stringByAppendingPathComponent:@"command.json"];
     NSData *data = [NSData dataWithContentsOfFile:cmdPath];
@@ -1154,6 +1176,15 @@ static void ATHandleCommand(void) {
         [[NSFileManager defaultManager] removeItemAtPath:ATStopFlagPath() error:nil];
         ATLog(@"stop requested (forced stop)");
         ATWriteStatus(NO, @"");
+        return;
+    }
+
+    // 阶段 0 探针 P2：SpringBoard 内 spawn（不跑脚本、不影响任何现有状态）
+    if ([action isEqualToString:@"probe"]) {
+        if (!ATIsSpringBoard()) return;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            @autoreleasepool { ATProbeSpawnFromSpringBoard(); }
+        });
         return;
     }
 
@@ -1202,7 +1233,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.8 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.9 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

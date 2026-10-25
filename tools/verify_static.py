@@ -256,8 +256,47 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.8三处同步",
-          "Version: 0.3.8" in ctrl and "<string>0.3.8</string>" in plist_raw and "v0.3.8" in tweak)
+    check("V 版本0.3.9三处同步",
+          "Version: 0.3.9" in ctrl and "<string>0.3.9</string>" in plist_raw and "v0.3.9" in tweak)
+
+    # ---- R32: 阶段 0 探针包 v0.3.9（A/B 双模式可行性验证 P1-P5）----
+    # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义
+    probe_mk   = read(root, "probe/Makefile")
+    root_mk    = read(root, "Makefile")
+    probe_main = read(root, "probe/main.m")
+    postinst   = read(root, "layout/DEBIAN/postinst")
+    app_probe  = read(root, "app/Source/ATLProbe.m")
+    logvc_raw  = read(root, "app/Source/ATLLogViewController.m")
+    app_mk     = read(root, "app/Makefile")
+    probe_ent  = read(root, "probe/entitlements.plist")
+
+    check("R32 probe/Makefile 存在且用 tool.mk",
+          "TOOL_NAME = ATLiteProbe" in probe_mk and "tool.mk" in probe_mk)
+    check("R32 probe 安装路径为 app bundle（出界 exec 会 EPERM）",
+          "ATLiteProbe_INSTALL_PATH = /Applications/ATLite.app" in probe_mk)
+    check("R32 probe 自带 entitlements 且免 Killed:9",
+          "platform-application" in probe_ent and "no-sandbox" in probe_ent)
+    check("R32 根 Makefile 含 probe 子工程", "probe" in root_mk)
+    check("R32 postinst 对探针 setuid",
+          "chmod u+s" in postinst and "ATLiteProbe" in postinst)
+    check("R32 P3 身份标记（euid 判据）", "PROBE_P3" in probe_main and "geteuid()" in probe_main)
+    check("R32 P4 HID 注入探针",
+          "PROBE_P4" in probe_main and "IOHIDEventSystemClientDispatchEvent" in probe_main)
+    check("R32 P5 Framebuffer 主路径",
+          "PROBE_P5" in probe_main and "IOMobileFramebufferGetLayerDefaultSurface" in probe_main)
+    check("R32 P5 RenderDisplay 回退路径", "CARenderServerRenderDisplay" in probe_main)
+    check("R32 探针不依赖 SDK 私有类型",
+          "ATSurfaceRef" in probe_main and "ATFBConn" in probe_main and "AT_TRANSDUCER_HAND" in probe_main)
+    check("R32 探针结果落盘且 mobile 可读",
+          "probe.log" in probe_main and "0666" in probe_main)
+    check("R32 App 侧用 posix_spawn（禁私有 NSTask）",
+          "posix_spawn" in app_probe and "NSTask" not in app_probe)
+    check("R32 App 侧 P1 标记", "PROBE_P1" in app_probe)
+    check("R32 tweak 侧 P2 标记", "PROBE_P2" in tweak)
+    check("R32 tweak 已补 spawn.h/fcntl.h",
+          "#import <spawn.h>" in tweak and "fcntl.h" in tweak)
+    check("R32 日志页有探针入口", "ATLRunProbe" in logvc_raw)
+    check("R32 app Makefile FILES 含 ATLProbe.m", "Source/ATLProbe.m" in app_mk)
 
     # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
     logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")

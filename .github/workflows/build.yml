@@ -81,8 +81,21 @@ jobs:
           sed -i 's|int stat = system(cmd);|int stat = -1; if (cmd == NULL) { lua_pushboolean(L, 0); return 1; } /* system() unavailable on iOS */|' loslib.c
           ! grep -q "system(cmd)" loslib.c
 
+      # 构建纪律铁律第 2 条：CI 脚本天生可诊断。断言先于构建跑，
+      # 让"断言不过"与"编译不过"在日志里是两个独立且可区分的步骤。
+      - name: Static assertions
+        run: |
+          set -x
+          python3 --version
+          python3 tools/verify_static.py
+
       - name: Build package
-        run: make package FINALPACKAGE=1
+        run: |
+          set -x
+          make package FINALPACKAGE=1
+          # 探针必须 stage 进 app bundle（出 /var/containers/Bundle 会 exec EPERM）
+          find .theos -name 'ATLiteProbe' -print
+          test -n "$(find .theos -name 'ATLiteProbe' -print -quit)"
 
       - name: Upload deb
         uses: actions/upload-artifact@v4

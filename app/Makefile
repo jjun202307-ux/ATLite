@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = ATLite
 
-ATLite_FILES = Source/main.m Source/ATLAppDelegate.m Source/ATLRootViewController.m Source/ATLWebServer.m Source/ATLPaths.m Source/ATLCommand.m Source/ATLLogViewController.m
+ATLite_FILES = Source/main.m Source/ATLAppDelegate.m Source/ATLRootViewController.m Source/ATLWebServer.m Source/ATLPaths.m Source/ATLCommand.m Source/ATLLogViewController.m Source/ATLProbe.m
 ATLite_FRAMEWORKS = UIKit Foundation CoreFoundation
 ATLite_CFLAGS = -fobjc-arc
 # RESEARCH A2/A3：越狱 App 必须带 entitlements（AutoTouch 实证四键），
