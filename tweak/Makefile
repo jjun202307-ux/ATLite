@@ -12,3 +12,5 @@ ATLiteTweak_FRAMEWORKS = UIKit Foundation CoreFoundation CoreGraphics ImageIO Qu
 ATLiteTweak_CFLAGS = -fobjc-arc -Ilib/lua53 -Wno-deprecated-declarations -Wno-error=string-plus-int
 
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+ATLiteTweak_CCFLAGS = -std=c++11

@@ -33,6 +33,7 @@
 #import "ATCore.h"
 #import "../shared/ATLEmailJob.h"
 
+#include <stdarg.h>
 extern "C" {
 #include <lua.h>
 #include <lualib.h>
