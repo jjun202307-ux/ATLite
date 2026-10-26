@@ -13,4 +13,4 @@ ATLiteTweak_CFLAGS = -fobjc-arc -Ilib/lua53 -Wno-deprecated-declarations -Wno-er
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-ATLiteTweak_CCFLAGS = -std=gnu++11
+ATLiteTweak_CCFLAGS = -std=gnu++11 -fno-modules
