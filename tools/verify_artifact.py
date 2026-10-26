@@ -84,6 +84,18 @@ def macho_slices(blob):
     return [result]
 
 
+def modern_arm64e(slice_info):
+    """User-space, versioned ptrauth ABI required for iOS 14+ system injection.
+
+    LLVM MachO.h: 0x80000000 versioned, 0x40000000 kernel, bits 27..24 version.
+    Apple user-space ABI currently uses version 0 (full subtype 0x80000002).
+    """
+    subtype = slice_info['subtype']
+    return (slice_info['cpu'] == 0x100000c and subtype & 0xffffff == 2
+            and bool(subtype & 0x80000000) and not subtype & 0x40000000
+            and (subtype >> 24) & 0xf == 0)
+
+
 def main(deb_path):
     m = parse_ar(deb_path)
     ctl = tarfile.open(fileobj=io.BytesIO(
@@ -113,6 +125,9 @@ def main(deb_path):
                       len(slices) == 2 and {s['cpu'] for s in slices} == {0x100000c}
                       and {s['subtype'] & 0xffffff for s in slices} == {0, 2}
                       and all(s['filetype'] == kind for s in slices))
+                if kind == 6:
+                    check('SpringBoard tweak uses iOS14+ arm64e ABI',
+                          any(modern_arm64e(s) for s in slices))
                 if kind == 2:
                     need = ['platform-application', 'com.apple.private.security.no-sandbox']
                     if executable.endswith('/ATLite'):

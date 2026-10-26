@@ -5,38 +5,39 @@ on:
   workflow_dispatch:
 
 env:
-  THEOS: /home/runner/theos
+  THEOS: /tmp/atlite-theos
   THEOS_PACKAGE_SCHEME: roothide
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 官方 install-theos 脚本要求的依赖: ldid(打包签名,Ubuntu apt 无此包,取 Procursus 官方二进制)
-      # + xz-utils(解压工具链与 SDK)
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bash curl perl rsync xz-utils fakeroot git
-          sudo curl -sL -o /usr/local/bin/ldid https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64
-          sudo chmod +x /usr/local/bin/ldid
-          ldid -V | head -1
+          set -eux
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew install ldid xz make
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+          ldid -V
 
-      # 官方安装规则:
-      # 1) theos 本体 (recursive, 含 vendor/logos 等)
-      # 2) 工具链: L1ghtmann/llvm-project latest, iOSToolchain-x86_64.tar.xz -> $THEOS/toolchain/
-      # 3) SDK: $THEOS/bin/install-sdk latest
+      # iOS14+ SpringBoard injection needs the versioned arm64e ABI.
+      # Use Apple's Xcode compiler/linker, not the legacy Linux clang11 toolchain.
       - name: Setup Theos
         run: |
-          git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS
-          curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz | tar -xJf - -C $THEOS/toolchain/
-          $THEOS/bin/install-sdk latest
-          test -x $THEOS/toolchain/linux/iphone/bin/clang
-          $THEOS/toolchain/linux/iphone/bin/clang --version | head -1
-          ls $THEOS/sdks
+          set -eux
+          xcodebuild -version
+          xcrun --sdk iphoneos clang --version
+          git clone --recursive --depth=1 https://github.com/theos/theos.git "$THEOS"
+          "$THEOS/bin/install-sdk" latest
+          ls "$THEOS/sdks"
 
       # Theos 官方无 roothide scheme 模块(vendor/mod 仅有 rootless, 其 deb.mk 强制
       # THEOS_PACKAGE_ARCH := iphoneos-arm64, 不匹配 roothide 设备的 iphoneos-arm64e)。
@@ -58,7 +59,7 @@ jobs:
           ls "$THEOS/vendor/lib/iphone/rootless/" | head -5
           mkdir -p "$THEOS/lib/iphone/roothide"
           cp -r "$THEOS/vendor/lib/iphone/rootless/." "$THEOS/lib/iphone/roothide/"
-          test -f "$THEOS/lib/iphone/roothide/libroot_oldabi.a"
+          test -f "$THEOS/lib/iphone/roothide/libroot.a"
           echo SETUP_SCHEME_OK
 
       - name: Verify pinned Lua 5.3.6

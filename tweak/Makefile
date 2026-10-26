@@ -10,6 +10,5 @@ TWEAK_NAME = ATLiteTweak
 ATLiteTweak_FILES = ../shared/ATLEmailJob.m Tweak.xm $(wildcard lib/lua53/*.c)
 ATLiteTweak_FRAMEWORKS = UIKit Foundation CoreFoundation CoreGraphics ImageIO QuartzCore Vision
 ATLiteTweak_CFLAGS = -fobjc-arc -Ilib/lua53 -Wno-deprecated-declarations -Wno-error=string-plus-int
-ATLiteTweak_LDFLAGS = -Wl,-undefined,dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/tweak.mk

@@ -8,6 +8,13 @@ sys.path.insert(0,str(root/'tools'))
 spec.loader.exec_module(mod)
 
 class ArtifactMachO(unittest.TestCase):
+    def test_injected_tweak_requires_versioned_arm64e(self):
+        self.assertTrue(hasattr(mod,'modern_arm64e'),'arm64e ABI gate missing')
+        old={'cpu':0x100000c,'subtype':2}
+        modern={'cpu':0x100000c,'subtype':0x80000002}
+        self.assertFalse(mod.modern_arm64e(old))
+        self.assertTrue(mod.modern_arm64e(modern))
+        self.assertFalse(mod.modern_arm64e({'cpu':0x100000c,'subtype':0xc0000002}))
     def test_signature_is_parsed_not_string_searched(self):
         self.assertTrue(hasattr(mod,'macho_slices'),'real Mach-O parser missing')
         xml=plistlib.dumps({'platform-application':True})

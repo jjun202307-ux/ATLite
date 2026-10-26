@@ -151,7 +151,10 @@ def main(root):
     check("R7-E7 CI vendor/lib 复制(R20/E20)", "vendor/lib/iphone/rootless" in wf)
     check("R19-E19 CI set -x 诊断", "set -ux" in wf or "set -x" in wf)
     check("R19-E19 CI 存在性断言", "test -f" in wf)
-    check("R20-E20 CI 断言 libroot_oldabi", "libroot_oldabi.a" in wf)
+    check("R20-E20 CI 断言现代 libroot", 'test -f "$THEOS/lib/iphone/roothide/libroot.a"' in wf)
+    check("ABI 使用 macOS Xcode 工具链", "runs-on: macos-14" in wf and "xcrun --sdk iphoneos clang --version" in wf
+          and "iOSToolchain-x86_64.tar.xz" not in wf)
+    check("ABI 链接不放过未定义符号", "undefined,dynamic_lookup" not in read(root, "tweak/Makefile"))
 
     # ---- R22/E22: roothide 包无前缀（官方实证布局），postinst 用 vroot 路径 ----
     check("R22-E22 CI 无 /rootfs/var/jb 前缀", "/rootfs/var/jb" not in wf)
