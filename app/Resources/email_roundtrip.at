@@ -1,0 +1,39 @@
+-- 电脑 PUT /api/job 发邮箱，再运行本脚本。
+-- 默认预留 5 秒，请切到目标 App 并点中邮箱输入框。
+-- 已知坐标时填写 focus/submit；用户名识别规则按目标页面调整。
+local settings = {
+    focus = nil,             -- 例如 {120, 260}，单位为点
+    submit = nil,            -- 例如 {190, 420}；nil 表示不自动提交
+    beforeInputMs = 5000,
+    beforeOCRMs = 3000
+}
+
+local job = getEmailJob()
+if not job then log("没有待处理邮箱，请先从电脑发送") return end
+
+local ok, failure = pcall(function()
+    log("本次邮箱：" .. job.email .. "，请准备目标输入框")
+    msleep(settings.beforeInputMs)
+    if settings.focus then tap(settings.focus[1], settings.focus[2]) end
+    inputText(job.email)
+    if settings.submit then tap(settings.submit[1], settings.submit[2]) end
+    msleep(settings.beforeOCRMs)
+    local blocks = ocrText()
+    local lines, username = {}, nil
+    for _, block in ipairs(blocks) do
+        lines[#lines + 1] = block.text
+        username = username
+            or block.text:match("用户名%s*：%s*(.+)")
+            or block.text:match("用户名%s*:%s*(.+)")
+            or block.text:match("[Uu]sername%s*:%s*(.+)")
+    end
+    if not username then
+        error("OCR 未找到带“用户名：”或“Username:”的文字；请按实际页面调整识别规则", 0)
+    end
+    sendEmailResult(job.jobId, job.email, username, lines)
+    log("已回传邮箱和用户名：" .. username)
+end)
+if not ok then
+    failEmailJob(job.jobId, job.email, tostring(failure))
+    log("邮箱任务未完成：" .. tostring(failure))
+end

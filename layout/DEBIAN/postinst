@@ -1,11 +1,5 @@
 #!/bin/sh
-# roothide: postinst 运行在 vroot 环境（jbroot 为根），App 的 vroot 路径是 /Applications/ATLite.app
-# （实证：官方 com.roothide.patcher 的 postinst 用 /Applications/Patcher.app）。
-# roothide vroot：探针随 app bundle 安装，chmod u+s 让 App(mobile) spawn 后拿到 root。
-# 实证：触动精灵 roothide(355) 版 postinst 同样对 TSDaemon 执行 chmod u+s。
-# 失败不得阻塞安装；若 setuid 不生效，探针 P3 会打出 NOT-ROOT，据此换 persona-mgmt 方案。
-chmod u+s /Applications/ATLite.app/ATLiteProbe 2>/dev/null || true
-
-# 注册 App 图标(uicache)。失败不得阻塞安装。
+# Default diagnostics stay non-setuid; explicitly clear a previous installation mode.
+chmod 0755 /Applications/ATLite.app/ATLiteProbe 2>/dev/null || true
 uicache -p /Applications/ATLite.app 2>/dev/null || uicache -a 2>/dev/null || true
 exit 0

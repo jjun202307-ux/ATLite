@@ -1,3 +1,5 @@
+> 历史资料：保留原始研究与决策记录，不代表 v0.3.11 当前实现。以 TECHNICAL.md 与 LIGHTWEIGHT_PLAN.md 为准。
+
 # ATLite v0.2.0 重写实施计划（superpowers writing-plans）
 
 > 测试层：`tools/verify_static.py`（37 断言，每条对应 docs/ERRORS.md 一起真实事故）。

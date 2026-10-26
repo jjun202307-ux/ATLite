@@ -6,7 +6,6 @@
 	<dict>
 		<key>Bundles</key>
 		<array>
-			<string>com.apple.UIKit</string>
 			<string>com.apple.springboard</string>
 		</array>
 		<key>Mode</key>

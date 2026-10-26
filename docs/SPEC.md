@@ -1,6 +1,10 @@
+> 历史资料：保留原始研究与决策记录，不代表 v0.3.11 当前实现。以 TECHNICAL.md 与 LIGHTWEIGHT_PLAN.md 为准。
+
 # ATLite 规格书（v0.3.0）
 
-> 技术文档全部作废重建后的唯一规格来源。实现必须逐条对应本规格 + docs/RESEARCH.md 的事实。
+> ⚠️ **历史文档**：本文是 v0.3.0 时代的规格来源，仅作演变参考。
+> **当前实现的权威描述见 [TECHNICAL.md](TECHNICAL.md)**，脚本 API 见 [LUA_API.md](LUA_API.md)。
+> 下表之外的架构已变化（新增日志查看器、强停、探针、抓屏改用 RenderDisplay 等），以 TECHNICAL.md 为准。
 
 ## 应用框架（保留不变）
 

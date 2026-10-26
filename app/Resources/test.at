@@ -1,7 +1,7 @@
 -- ATLite 功能自检脚本
 -- 用法：手机打开 ATLite App（确保导入服务器已启动）→ 上传本文件 → 运行
 -- 建议在主屏幕或【设置】App 里运行（findText 测试需要屏幕上有中文文字）
--- 结果看两处：App 弹窗 + tweak 日志（<jbroot>/var/mobile/Library/ATLite/logs/tweak.log）
+-- 结果看两处：App 日志页 + tweak 日志（<jbroot>/var/mobile/Library/ATLite/logs/tweak.log）
 -- 卡住怎么办：点 App 右上角红色「⏹ 停止」（日志页工具栏也有）。脚本跑在 SpringBoard 里，
 --   划掉 App 是停不掉的 —— 必须用这个停止按钮。
 
@@ -42,7 +42,7 @@ else
     log("[SKIP] findImage 未上传模板或未匹配 —— 先上传 test_template.png 再测")
 end
 
--- 6. 搜色：取刚才中心点的颜色，再反向搜它（自洽性测试，必命中）
+-- 6. 搜色：取刚才中心点的颜色，再反向搜它（网格采样不保证细小色块命中）
 if c then
     local same = findColor(c, 10)
     if same and #same > 0 then

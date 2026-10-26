@@ -59,13 +59,13 @@
     // M3：目录必须先建（fresh 环境下 tweak %ctor 可能还没跑过，copy 静默失败即 R9 落空）
     [[NSFileManager defaultManager] createDirectoryAtPath:ATLScriptsDir()
                               withIntermediateDirectories:YES attributes:nil error:nil];
-    NSString *testPath = [ATLScriptsDir() stringByAppendingPathComponent:@"test.at"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:testPath]) return;
-    NSString *bundled = [[NSBundle mainBundle] pathForResource:@"test" ofType:@"at"];
-    if (!bundled) return;
-    NSError *err = nil;
-    if ([[NSFileManager defaultManager] copyItemAtPath:bundled toPath:testPath error:&err]) {
-        NSLog(@"[ATLite] seeded test.at -> %@", testPath);
+    for (NSString *name in @[@"test", @"email_roundtrip"]) {
+        NSString *target = [ATLScriptsDir() stringByAppendingPathComponent:[name stringByAppendingPathExtension:@"at"]];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:target]) continue;
+        NSString *bundled = [[NSBundle mainBundle] pathForResource:name ofType:@"at"];
+        NSError *error = nil;
+        if (bundled && ![[NSFileManager defaultManager] copyItemAtPath:bundled toPath:target error:&error])
+            NSLog(@"[ATLite] seed failed: %@", error);
     }
 }
 

@@ -1,3 +1,5 @@
+> 历史资料：保留原始研究与决策记录，不代表 v0.3.11 当前实现。以 TECHNICAL.md 与 LIGHTWEIGHT_PLAN.md 为准。
+
 # 构建计划 v0.3.9 —— 阶段 0 探针包（ATLiteProbe）
 
 > **方法**：superpowers（规格 → 计划 → RED-GREEN TDD → 评审 → 收尾）

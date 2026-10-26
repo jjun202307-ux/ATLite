@@ -11,6 +11,6 @@
 - (instancetype)initWithRootPath:(NSString *)rootPath port:(uint16_t)port;
 - (BOOL)start;
 - (void)shutdownServer; // 不取名 stop，避免与常见基类/协议方法撞名
-@property (nonatomic, readonly, assign, getter=isRunning) BOOL running;
+@property (atomic, readonly, assign, getter=isRunning) BOOL running;
 
 @end

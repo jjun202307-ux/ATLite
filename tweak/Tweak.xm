@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.10 — AutoTouch-style script runner (roothide/Dopamine, rootless fallback)
+// ATLiteTweak v0.3.11 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -28,6 +28,10 @@
 #include <sys/wait.h>
 #import <math.h>
 #import <stdlib.h>
+#import <signal.h>
+#import <string.h>
+#import "ATCore.h"
+#import "../shared/ATLEmailJob.h"
 
 extern "C" {
 #include <lua.h>
@@ -43,6 +47,8 @@ extern "C" {
 @interface VNRecognizedText (ATLiteSDKCompat)
 - (NSArray<VNRecognizedText *> *)topCandidates:(NSUInteger)maxCandidateCount;
 @property (nonatomic, readonly) CGRect boundingBox;
+@property (nonatomic, readonly) NSString *string;
+@property (nonatomic, readonly) float confidence;
 @end
 
 #define AT_DARWIN_NOTIFY @"me.atlite.command"
@@ -104,11 +110,11 @@ static NSString *ATStatusPath(void) {
 }
 static volatile sig_atomic_t gStopRequested = 0;
 static BOOL ATShouldStop(void) {
-    if (gStopRequested) return YES;
+    if (__sync_fetch_and_add(&gStopRequested, 0)) return YES;
     return [[NSFileManager defaultManager] fileExistsAtPath:ATStopFlagPath()];
 }
 static void ATClearStopFlag(void) {
-    gStopRequested = 0;
+    __sync_lock_test_and_set(&gStopRequested, 0);
     [[NSFileManager defaultManager] removeItemAtPath:ATStopFlagPath() error:nil];
 }
 static void ATWriteStatus(BOOL running, NSString *name) {
@@ -147,16 +153,22 @@ static void ATLog(NSString *fmt, ...) {
 // ---------------------------------------------------------------------------
 static volatile int32_t gRunningScripts = 0;
 
-static void ATWaitForPreviousScripts(double maxSec) {
-    if (__sync_fetch_and_add(&gRunningScripts, 0) == 0) return;
-    gStopRequested = 1; // 让旧脚本停下
-    ATLog(@"previous script still running — requesting stop, waiting up to %.1fs", maxSec);
-    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + maxSec;
-    while (__sync_fetch_and_add(&gRunningScripts, 0) > 0 &&
-           CFAbsoluteTimeGetCurrent() < deadline) {
-        struct timespec ts = {0, 50 * 1000 * 1000}; // 50ms
-        nanosleep(&ts, NULL);
-    }
+// Monotonic wall budget shared only with the one admitted worker.
+static double gScriptDeadline = 0;
+static double ATMonotonicNow(void) {
+    static mach_timebase_info_data_t tb;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ mach_timebase_info(&tb); });
+    return (double)mach_absolute_time() * tb.numer / tb.denom / 1e9;
+}
+static BOOL ATScriptExpired(void) {
+    return gScriptDeadline > 0 && ATMonotonicNow() >= gScriptDeadline;
+}
+static void ATCheckScript(lua_State *L) {
+    BOOL cancelled;
+    @autoreleasepool { cancelled = ATShouldStop(); }
+    if (cancelled) luaL_error(L, "STOP");
+    if (ATScriptExpired()) luaL_error(L, "ATLite: execution deadline exceeded");
 }
 
 #pragma mark - Touch/key simulation (IOHIDEvent)
@@ -187,14 +199,14 @@ static IOHIDEventSystemClientRef (*_AT_IOHIDEventSystemClientCreate)(CFAllocator
 static void (*_AT_IOHIDEventSystemClientDispatchEvent)(IOHIDEventSystemClientRef, IOHIDEventRef);
 // DigitizerEvent(15 参): allocator, ts, transducerType, index, identity, eventMask, options,
 //                        x, y, z, tipPressure, barrelPressure, range, touch, options
-static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
+static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, double, double, double, double, double, Boolean, Boolean, uint32_t);
 // FingerEvent（13 参，E5 的教训——多一个 uint32 都会错位寄存器）:
 //   allocator, ts, index, identity, eventMask, x, y, z, tipPressure, twist, range, touch, options
-static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, Float32, Float32, Float32, Float32, Float32, Boolean, Boolean, uint32_t);
+static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, double, double, double, double, double, Boolean, Boolean, uint32_t);
 static void (*_AT_IOHIDEventAppendEvent)(IOHIDEventRef, IOHIDEventRef, uint32_t);
 // ⚠ E1：真实符号名以 ...Value 结尾；"IOHIDEventSetInteger" 不存在
 static void (*_AT_IOHIDEventSetIntegerValue)(IOHIDEventRef, uint32_t, int32_t);
-static void (*_AT_IOHIDEventSetFloatValue)(IOHIDEventRef, uint32_t, Float32);
+static void (*_AT_IOHIDEventSetFloatValue)(IOHIDEventRef, uint32_t, double);
 // 键盘：usagePage/usage 真实类型 uint16_t（F48）
 static IOHIDEventRef (*_AT_IOHIDEventCreateKeyboardEvent)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
 
@@ -259,13 +271,24 @@ static void ATThrottleEvents(void) {
 
 // mach_absolute_time() ± 1ms（mach_timebase 正确换算 ticks）
 static uint64_t ATTimestampNow(void) {
-    static mach_timebase_info_data_t tb = {0, 0};
-    if (tb.denom == 0) mach_timebase_info(&tb);
-    if (tb.numer == 0 || tb.denom == 0) return mach_absolute_time();
-    uint64_t half = (1000000ULL * (uint64_t)tb.numer) / (uint64_t)tb.denom; // 1ms → ticks
-    if (half == 0 || half > 0x7fffffffULL) return mach_absolute_time();
-    return mach_absolute_time() + (int64_t)arc4random_uniform((uint32_t)(half * 2)) - (int64_t)half;
+    static mach_timebase_info_data_t tb;
+    static dispatch_once_t once;
+    static uint64_t previous = 0; // serialized by the sole script worker
+    dispatch_once(&once, ^{ mach_timebase_info(&tb); });
+    uint64_t half = ATNanosecondsToTicks(1000000, tb.numer, tb.denom);
+    uint64_t now = mach_absolute_time();
+    int64_t jitter = (half && half < INT32_MAX) ?
+        (int64_t)arc4random_uniform((uint32_t)(half * 2)) - (int64_t)half : 0;
+    uint64_t stamp = jitter < 0 && (uint64_t)(-jitter) > now ? now : now + jitter;
+    if (stamp <= previous) stamp = previous + 1;
+    previous = stamp;
+    return stamp;
 }
+
+typedef struct { BOOL down; float x, y; } ATTouchState;
+static ATTouchState gTouches[10];
+static BOOL gKeys[65536];
+static BOOL gASCIIKeys[256];
 
 // action: 0=down 1=move 2=up
 // 事件装配（R4）：与 SimulateTouch/KIF 逐参数一致（F42/F43）——
@@ -273,6 +296,8 @@ static uint64_t ATTimestampNow(void) {
 //   finger（子）：index 从 1 起（finger+1）、identity=2、mask 动态、tipPressure=0
 static void ATSimulateTouch(int action, int finger, float x, float y) {
     if (!gHIDReady) return;
+    if (finger < 0 || finger >= 10 || !isfinite(x) || !isfinite(y)) return;
+    ATThrottleEvents();
     uint64_t ts = ATTimestampNow();
     BOOL isUp = (action == 2);
     uint32_t mask = (action == 1)
@@ -304,8 +329,8 @@ static void ATSimulateTouch(int action, int finger, float x, float y) {
     _AT_IOHIDEventSetIntegerValue(fg,   AT_FIELD_IS_DISPLAY_INTEGRATED, 1);
     _AT_IOHIDEventSetFloatValue(fg, AT_FIELD_MAJOR_RADIUS, major);
     _AT_IOHIDEventSetFloatValue(fg, AT_FIELD_MINOR_RADIUS, minor);
-    ATThrottleEvents(); // E25-C：节流，避免事件风暴拖垮 SpringBoard
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, hand);
+    gTouches[finger] = (ATTouchState){ !isUp, x, y };
     CFRelease(hand);
     CFRelease(fg);
 }
@@ -314,13 +339,33 @@ static void ATSimulateTouch(int action, int finger, float x, float y) {
 #define AT_HID_USAGE_PAGE_CONSUMER 0x0C
 static void ATSimulateKey(BOOL down, int usage) {
     if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent) return;
+    if (usage < 0 || usage > 65535) return;
+    ATThrottleEvents();
     IOHIDEventRef ev = _AT_IOHIDEventCreateKeyboardEvent(
         kCFAllocatorDefault, ATTimestampNow(),
         AT_HID_USAGE_PAGE_CONSUMER, (uint16_t)usage, down ? TRUE : FALSE, 0);
     if (!ev) return;
-    ATThrottleEvents(); // E25-C
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, ev);
+    gKeys[usage] = down;
     CFRelease(ev);
+}
+
+static BOOL ATASCIIKeyEvent(BOOL down, uint16_t usage) {
+    if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent || usage > 255) return NO;
+    ATThrottleEvents();
+    IOHIDEventRef event = _AT_IOHIDEventCreateKeyboardEvent(kCFAllocatorDefault,
+        ATTimestampNow(), 0x07, usage, down, 0);
+    if (!event) return NO;
+    _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, event);
+    gASCIIKeys[usage] = down;
+    CFRelease(event); return YES;
+}
+
+static void ATReleaseAllInputs(void) {
+    for (int i=0; i<10; i++) if (gTouches[i].down)
+        ATSimulateTouch(2, i, gTouches[i].x, gTouches[i].y);
+    for (int i=0; i<65536; i++) if (gKeys[i]) ATSimulateKey(NO, i);
+    for (int i=0; i<256; i++) if (gASCIIKeys[i]) ATASCIIKeyEvent(NO, (uint16_t)i);
 }
 
 #pragma mark - Screen capture (CARenderServer + IOSurface)
@@ -341,7 +386,7 @@ static uint32_t (*_AT_IOSurfaceGetPixelFormat)(IOSurfaceRef);
 static void * (*_AT_IOSurfaceGetBaseAddress)(IOSurfaceRef);
 // 渲染前后 Lock/Unlock（AutoTouch/SO 同模式；IOSurfaceCreate 必需，Lock/Unlock 可选）
 static int32_t (*_AT_IOSurfaceLock)(IOSurfaceRef, uint32_t, uint32_t *);
-static void (*_AT_IOSurfaceUnlock)(IOSurfaceRef, uint32_t, uint32_t);
+static int32_t (*_AT_IOSurfaceUnlock)(IOSurfaceRef, uint32_t, uint32_t *);
 static BOOL gCaptureReady = NO;
 
 static void ATLoadCaptureSymbols(void) {
@@ -366,7 +411,8 @@ static void ATLoadCaptureSymbols(void) {
     _AT_IOSurfaceUnlock              = (typeof(_AT_IOSurfaceUnlock))dlsym(ios, "IOSurfaceUnlock");
     if (!_AT_CARenderServerRenderDisplay || !_AT_IOSurfaceCreate ||
         !_AT_IOSurfaceGetWidth || !_AT_IOSurfaceGetHeight || !_AT_IOSurfaceGetBytesPerRow ||
-        !_AT_IOSurfaceGetPixelFormat || !_AT_IOSurfaceGetBaseAddress) {
+        !_AT_IOSurfaceGetPixelFormat || !_AT_IOSurfaceGetBaseAddress ||
+        !_AT_IOSurfaceLock || !_AT_IOSurfaceUnlock) {
         ATLog(@"CARenderServer/IOSurface symbols incomplete, capture disabled");
         return;
     }
@@ -459,7 +505,9 @@ static IOSurfaceRef ATRenderIntoNewSurface(void) {
     IOSurfaceRef s = _AT_IOSurfaceCreate(props);
     CFRelease(props);
     if (!s) { ATLog(@"IOSurfaceCreate failed"); return NULL; }
-    if (_AT_IOSurfaceLock) _AT_IOSurfaceLock(s, 0, NULL);
+    if (!_AT_IOSurfaceLock || !_AT_IOSurfaceUnlock || _AT_IOSurfaceLock(s, 0, NULL) != 0) {
+        CFRelease(s); ATLog(@"capture: surface write lock failed"); return NULL;
+    }
     int kr = _AT_CARenderServerRenderDisplay(0, CFSTR("LCD"), s, 0, 0);
     if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 0, 0);
     if (kr != 0) {
@@ -471,26 +519,36 @@ static IOSurfaceRef ATRenderIntoNewSurface(void) {
 }
 
 static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) {
-    if (gCaptureBroken) return NULL;
-    if (!gCaptureQueue) {
-        gCaptureQueue = dispatch_queue_create("me.atlite.capture", DISPATCH_QUEUE_SERIAL);
-    }
-    __block IOSurfaceRef s = NULL;
+    static dispatch_once_t once;
+    static NSObject *captureGate;
+    dispatch_once(&once, ^{ gCaptureQueue = dispatch_queue_create("me.atlite.capture", DISPATCH_QUEUE_SERIAL); captureGate = [NSObject new]; });
+    @synchronized (captureGate) { if (gCaptureBroken) return NULL; }
+    __block IOSurfaceRef result = NULL;
+    __block BOOL abandoned = NO;
+    NSObject *gate = [NSObject new];
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     dispatch_async(gCaptureQueue, ^{
-        s = ATRenderIntoNewSurface();
-        dispatch_semaphore_signal(sem);
+        @autoreleasepool {
+            IOSurfaceRef surface = ATRenderIntoNewSurface();
+            @synchronized (gate) {
+                if (abandoned) { if (surface) CFRelease(surface); }
+                else result = surface;
+            }
+            dispatch_semaphore_signal(sem);
+        }
     });
     long r = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW,
                                     (int64_t)(AT_CAPTURE_TIMEOUT_SEC * NSEC_PER_SEC)));
-    if (r != 0) {
-        // 超时：渲染链路已挂。标记后不再重试（重试只会再泄漏一个卡死的线程）
-        gCaptureBroken = YES;
-        ATLog(@"capture hung >%.1fs — disabled for this session (E25 render-server deadlock guard)",
-              AT_CAPTURE_TIMEOUT_SEC);
-        return NULL;
+    @synchronized (gate) {
+        if (r != 0) {
+            abandoned = YES;
+            if (result) { CFRelease(result); result = NULL; }
+            @synchronized (captureGate) { gCaptureBroken = YES; }
+            ATLog(@"capture hung >1.5s — disabled for this session; engine isolation still required");
+            return NULL;
+        }
+        return result;
     }
-    return s;
 }
 
 // 抓主屏 → RGBA8（仅 SpringBoard 进程可用）
@@ -499,20 +557,21 @@ static BOOL ATCaptureScreen(ATBitmap *out) {
     IOSurfaceRef s = ATCaptureSurfaceWithTimeout();
     if (!s) return NO;
     uint32_t seed = 0;
-    if (_AT_IOSurfaceLock) _AT_IOSurfaceLock(s, 1 /*kIOSurfaceLockReadOnly*/, &seed);
+    if (!_AT_IOSurfaceLock || !_AT_IOSurfaceUnlock ||
+        _AT_IOSurfaceLock(s, 3 /*ReadOnly | AvoidSync*/, &seed) != 0) { CFRelease(s); return NO; }
     int w = (int)_AT_IOSurfaceGetWidth(s);
     int h = (int)_AT_IOSurfaceGetHeight(s);
     size_t pitch = _AT_IOSurfaceGetBytesPerRow(s);
     uint32_t fmt = _AT_IOSurfaceGetPixelFormat(s); // 'BGRA' 或 'ARGB'
     uint8_t *base = (uint8_t *)_AT_IOSurfaceGetBaseAddress(s);
-    if (w <= 0 || h <= 0 || !base) {
-        if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);
+    if (w <= 0 || h <= 0 || !base || pitch < (size_t)w * 4) {
+        if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, &seed);
         CFRelease(s); return NO;
     }
     out->w = w; out->h = h;
     out->rgba = (uint8_t *)malloc((size_t)w * h * 4);
     if (!out->rgba) {
-        if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);
+        if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, &seed);
         CFRelease(s); return NO;
     }
     // 像素格式→RGBA 通道索引（M1：ARGB 的 G 在 2 号位，BGRA 的 G 在 1 号位；
@@ -528,10 +587,10 @@ static BOOL ATCaptureScreen(ATBitmap *out) {
             dst[x*4+0] = src[x*4+rIdx];
             dst[x*4+1] = src[x*4+gIdx];
             dst[x*4+2] = src[x*4+bIdx];
-            dst[x*4+3] = src[x*4+3];
+            dst[x*4+3] = 255;
         }
     }
-    if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, seed);
+    if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, &seed);
     CFRelease(s);
     return YES;
 }
@@ -558,113 +617,48 @@ static BOOL ATRGBAToGray(const ATBitmap *src, ATGray *dst) {
     return YES;
 }
 
-static BOOL ATGrayDownscale(const ATGray *src, ATGray *dst, int scale) {
-    dst->w = src->w / scale; dst->h = src->h / scale;
-    if (dst->w <= 0 || dst->h <= 0) return NO;
-    dst->g = (uint8_t *)malloc((size_t)dst->w * dst->h);
-    if (!dst->g) return NO;
-    for (int y = 0; y < dst->h; y++)
-        for (int x = 0; x < dst->w; x++)
-            dst->g[(size_t)y * dst->w + x] = src->g[(size_t)(y * scale) * src->w + x * scale];
-    return YES;
+typedef struct { double deadline; BOOL interrupted; unsigned checks; } ATSearchContext;
+static int ATSearchCancelled(void *opaque) {
+    ATSearchContext *context = (ATSearchContext *)opaque;
+    BOOL cancelled = __sync_fetch_and_add(&gStopRequested, 0) != 0;
+    if ((context->checks++ & 63u) == 0) {
+        @autoreleasepool { cancelled = ATShouldStop(); }
+    }
+    if (cancelled || ATScriptExpired() || ATMonotonicNow() >= context->deadline) {
+        context->interrupted = YES;
+        return 1;
+    }
+    return 0;
 }
-
-// 零均值 NCC，返回最佳位置与得分
 static BOOL ATNCCBest(const ATGray *hay, const ATGray *needle, double minScore,
-                      int *outX, int *outY, double *outScore) {
-    if (needle->w < 4 || needle->h < 4 || hay->w < needle->w || hay->h < needle->h) return NO;
-    double tMean = 0;
-    for (int i = 0; i < needle->w * needle->h; i++) tMean += needle->g[i];
-    tMean /= needle->w * needle->h;
-    double tVar = 0;
-    for (int i = 0; i < needle->w * needle->h; i++) {
-        double d = needle->g[i] - tMean;
-        tVar += d * d;
-    }
-    if (tVar < 1e-6) return NO;
-
-    double best = -1;
-    int bx = -1, by = -1;
-    int maxX = hay->w - needle->w, maxY = hay->h - needle->h;
-    for (int y = 0; y <= maxY; y++) {
-        for (int x = 0; x <= maxX; x++) {
-            double wMean = 0;
-            size_t idx = (size_t)y * hay->w + x;
-            for (int j = 0; j < needle->h; j++) {
-                const uint8_t *row = hay->g + idx + (size_t)j * hay->w;
-                for (int i = 0; i < needle->w; i++) wMean += row[i];
-            }
-            wMean /= needle->w * needle->h;
-            double num = 0, wVar = 0;
-            for (int j = 0; j < needle->h; j++) {
-                const uint8_t *row = hay->g + idx + (size_t)j * hay->w;
-                for (int i = 0; i < needle->w; i++) {
-                    double d = row[i] - wMean;
-                    wVar += d * d;
-                    num += d * (needle->g[(size_t)j * needle->w + i] - tMean);
-                }
-            }
-            if (wVar < 1e-6) continue;
-            double score = num / sqrt(tVar * wVar);
-            if (score > best) { best = score; bx = x; by = y; }
-        }
-    }
-    if (bx < 0 || best < minScore) return NO;
-    *outX = bx; *outY = by; *outScore = best;
-    return YES;
+                      int *outX, int *outY, double *outScore, ATSearchContext *context) {
+    return ATCoreNCCBest(hay->g, hay->w, hay->h, needle->g, needle->w, needle->h,
+                        minScore, outX, outY, outScore, ATSearchCancelled, context) == 1;
 }
-
-// 完整搜图: 粗搜(1/4) → 粗命中附近 ±pad 原图精搜
 static BOOL ATFindImageInScreen(const ATGray *screenFull, const ATBitmap *tmplRGBA,
-                                double similarity, int *outX, int *outY, double *outScore) {
-    ATGray tmplGray = {0};
-    if (!ATRGBAToGray(tmplRGBA, &tmplGray)) return NO;
-
-    ATGray screenQuarter = {0}, tmplQuarter = {0};
-    int cx = 0, cy = 0;
-    double score = 0;
-    BOOL found = NO;
-    if (ATGrayDownscale(screenFull, &screenQuarter, 4) && ATGrayDownscale(&tmplGray, &tmplQuarter, 4)) {
-        found = ATNCCBest(&screenQuarter, &tmplQuarter, similarity - 0.15, &cx, &cy, &score);
-    }
-    ATFreeGray(&screenQuarter);
-    ATFreeGray(&tmplQuarter);
-    if (!found) { ATFreeGray(&tmplGray); return NO; }
-
-    // 精搜窗口：粗命中(原图坐标)扩 pad，保证完整容纳模板
-    const int pad = 12;
-    int x0 = MAX(0, cx * 4 - pad);
-    int y0 = MAX(0, cy * 4 - pad);
-    int x1 = MIN(screenFull->w, cx * 4 + tmplGray.w + pad * 2 + 8);
-    int y1 = MIN(screenFull->h, cy * 4 + tmplGray.h + pad * 2 + 8);
-    if (x1 - x0 < tmplGray.w || y1 - y0 < tmplGray.h) { ATFreeGray(&tmplGray); return NO; }
-
-    ATGray region = {0};
-    region.w = x1 - x0; region.h = y1 - y0;
-    region.g = (uint8_t *)malloc((size_t)region.w * region.h);
-    if (!region.g) { ATFreeGray(&tmplGray); return NO; }
-    for (int y = 0; y < region.h; y++)
-        memcpy(region.g + (size_t)y * region.w,
-               screenFull->g + (size_t)(y0 + y) * screenFull->w + x0, region.w);
-
-    int rx = 0, ry = 0;
-    double rs = 0;
-    BOOL ok = ATNCCBest(&region, &tmplGray, similarity, &rx, &ry, &rs);
-    if (ok) { *outX = x0 + rx; *outY = y0 + ry; *outScore = rs; }
-    ATFreeGray(&region);
-    ATFreeGray(&tmplGray);
-    return ok;
+                                double similarity, int *outX, int *outY, double *outScore,
+                                BOOL *interrupted) {
+    ATGray templateGray = {0};
+    if (!ATRGBAToGray(tmplRGBA, &templateGray)) return NO;
+    ATSearchContext context = { ATMonotonicNow() + 2.0, NO, 0 };
+    BOOL found = ATNCCBest(screenFull, &templateGray, similarity, outX, outY, outScore, &context);
+    *interrupted = context.interrupted;
+    ATFreeGray(&templateGray);
+    return found;
 }
 
 // 模板 PNG/JPG → RGBA（路径白名单校验，防目录穿越）
 static BOOL ATLoadTemplate(const char *nameUtf8, ATBitmap *out) {
     NSString *name = [NSString stringWithUTF8String:nameUtf8];
-    if (name.length == 0 || name.length > 128) return NO;
-    if ([name containsString:@"/"] || [name containsString:@"\\"] || [name containsString:@".."]) return NO;
+    if (!name.length || name.length > 1024 || [name containsString:@"\\"] ||
+        [name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) return NO;
     NSString *ext = name.pathExtension.lowercaseString;
     if (![ext isEqualToString:@"png"] && ![ext isEqualToString:@"jpg"] &&
         ![ext isEqualToString:@"jpeg"]) return NO;
-    NSString *path = [ATImagesDir() stringByAppendingPathComponent:name];
+    NSString *root = ATImagesDir().stringByResolvingSymlinksInPath;
+    NSString *path = ([name isAbsolutePath] ? name : [root stringByAppendingPathComponent:name]);
+    path = path.stringByStandardizingPath.stringByResolvingSymlinksInPath;
+    if (![path hasPrefix:[root stringByAppendingString:@"/"]]) return NO;
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) return NO;
     UIImage *img = [UIImage imageWithData:data];
@@ -700,9 +694,15 @@ static CGImageRef ATCreateCGImageFromBitmap(const ATBitmap *b) {
 #pragma mark - Lua engine (API 对齐 AutoTouch)
 
 static CGSize ATScreenSize(void) {
-    CGSize s = CGSizeMake(390, 844);
-    @try { s = [UIScreen mainScreen].bounds.size; } @catch (__unused id e) {}
-    return s;
+    if ([NSThread isMainThread]) return UIScreen.mainScreen.bounds.size;
+    __block CGSize size = CGSizeZero;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        size = UIScreen.mainScreen.bounds.size;
+        dispatch_semaphore_signal(sem);
+    });
+    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC))) return CGSizeZero;
+    return size;
 }
 
 // RESEARCH C3：位图像素宽 / 屏幕点宽 = 缩放（1x 设备为 1，无损害）
@@ -734,6 +734,7 @@ static int l_keyUp(lua_State *L) {
 // AutoTouch 语义: usleep(微秒)
 static int l_usleep(lua_State *L) {
     double us = luaL_checknumber(L,1);
+    if (!isfinite(us) || us < 0) return luaL_error(L, "usleep: expected finite nonnegative duration");
     // E26：分片睡眠（每片 ≤50ms 检查一次停止）。
     // 否则 usleep(5秒) 期间点停止要等满 5 秒才生效，用户会以为停不掉。
     double left = us;
@@ -743,7 +744,8 @@ static int l_usleep(lua_State *L) {
         req.tv_sec = 0;
         req.tv_nsec = (long)(slice * 1000.0);
         nanosleep(&req, NULL);
-        if (ATShouldStop()) return luaL_error(L, "STOP");
+        ATCheckScript(L);
+        if (ATScriptExpired()) return luaL_error(L, "ATLite: execution deadline exceeded");
         left -= slice;
     }
     return 0;
@@ -751,6 +753,7 @@ static int l_usleep(lua_State *L) {
 // ATLite 扩展: msleep(毫秒)
 static int l_msleep(lua_State *L) {
     double ms = luaL_checknumber(L,1);
+    if (!isfinite(ms) || ms < 0) return luaL_error(L, "msleep: expected finite nonnegative duration");
     // E26：同 l_usleep，分片检查停止
     double left = ms;
     while (left > 0) {
@@ -759,7 +762,8 @@ static int l_msleep(lua_State *L) {
         req.tv_sec = 0;
         req.tv_nsec = (long)(slice * 1000000.0);
         nanosleep(&req, NULL);
-        if (ATShouldStop()) return luaL_error(L, "STOP");
+        ATCheckScript(L);
+        if (ATScriptExpired()) return luaL_error(L, "ATLite: execution deadline exceeded");
         left -= slice;
     }
     return 0;
@@ -808,21 +812,26 @@ static int l_findColor(lua_State *L) {
     if (!ATCaptureScreen(&b)) { lua_pushnil(L); return 1; }
     int scanScale = 4, sw = b.w / scanScale, sh = b.h / scanScale;
     double ptScale = ATCaptureScale(&b);    // 像素 → 点（返回给 Lua）
-    lua_newtable(L);
+    double points[10][2];
     int n = 0;
-    for (int y = 0; y < sh && n < 10; y++) {
-        for (int x = 0; x < sw && n < 10; x++) {
-            const uint8_t *px = b.rgba + ((size_t)(y * scanScale) * b.w + x * scanScale) * 4;
-            int dr = px[0] - (int)cr, dg = px[1] - (int)cg, db2 = px[2] - (int)cb;
-            if (abs(dr) <= tol && abs(dg) <= tol && abs(db2) <= tol) {
-                lua_newtable(L);
-                lua_pushinteger(L, (lua_Integer)llround(x * scanScale / ptScale)); lua_rawseti(L, -2, 1);
-                lua_pushinteger(L, (lua_Integer)llround(y * scanScale / ptScale)); lua_rawseti(L, -2, 2);
-                lua_rawseti(L, -2, ++n);
+    for (int y=0; y<sh && n<10; y++) {
+        if (ATShouldStop() || ATScriptExpired()) { ATFreeBitmap(&b); ATCheckScript(L); }
+        for (int x=0; x<sw && n<10; x++) {
+            const uint8_t *px = b.rgba + ((size_t)(y*scanScale)*b.w+x*scanScale)*4;
+            if (abs(px[0]-(int)cr)<=tol && abs(px[1]-(int)cg)<=tol && abs(px[2]-(int)cb)<=tol) {
+                points[n][0] = llround(x*scanScale/ptScale);
+                points[n][1] = llround(y*scanScale/ptScale); n++;
             }
         }
     }
     ATFreeBitmap(&b);
+    lua_newtable(L);
+    for (int i=0; i<n; i++) {
+        lua_createtable(L,2,0);
+        lua_pushinteger(L,(lua_Integer)points[i][0]); lua_rawseti(L,-2,1);
+        lua_pushinteger(L,(lua_Integer)points[i][1]); lua_rawseti(L,-2,2);
+        lua_rawseti(L,-2,i+1);
+    }
     return 1;
 }
 
@@ -830,6 +839,7 @@ static int l_findColor(lua_State *L) {
 static int l_findImage(lua_State *L) {
     const char *name = luaL_checkstring(L, 1);
     double sim = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : 0.9;
+    if (!isfinite(sim) || sim < 0 || sim > 1) return luaL_error(L, "findImage: similarity must be finite in [0,1]");
     ATBitmap tmpl = {0};
     if (!ATLoadTemplate(name, &tmpl)) { ATLog(@"findImage: template not found: %s", name); lua_pushnil(L); return 1; }
     ATBitmap screen = {0};
@@ -841,75 +851,197 @@ static int l_findImage(lua_State *L) {
     if (!haveGray) { ATFreeBitmap(&tmpl); lua_pushnil(L); return 1; }
 
     int x = 0, y = 0; double score = 0;
-    lua_newtable(L);
-    int n = 0;
-    if (ATFindImageInScreen(&screenGray, &tmpl, sim, &x, &y, &score)) {
-        // 像素 → 点（中心点返回，供 tap 直接用）
-        lua_newtable(L);
-        lua_pushinteger(L, (lua_Integer)llround((x + tmpl.w / 2.0) / ptScale)); lua_rawseti(L, -2, 1);
-        lua_pushinteger(L, (lua_Integer)llround((y + tmpl.h / 2.0) / ptScale)); lua_rawseti(L, -2, 2);
-        lua_pushnumber(L, score);           lua_rawseti(L, -2, 3);
-        lua_rawseti(L, -2, ++n);
-    }
+    BOOL interrupted = NO;
+    BOOL found = ATFindImageInScreen(&screenGray, &tmpl, sim, &x, &y, &score, &interrupted);
+    double centerX = (x + tmpl.w / 2.0) / ptScale;
+    double centerY = (y + tmpl.h / 2.0) / ptScale;
     ATFreeGray(&screenGray);
     ATFreeBitmap(&tmpl);
+    ATCheckScript(L);
+    if (interrupted) return luaL_error(L, "findImage: search exceeded 2s computation budget");
+    lua_newtable(L);
+    if (found) {
+        lua_createtable(L,3,0);
+        lua_pushinteger(L,(lua_Integer)llround(centerX)); lua_rawseti(L,-2,1);
+        lua_pushinteger(L,(lua_Integer)llround(centerY)); lua_rawseti(L,-2,2);
+        lua_pushnumber(L,score); lua_rawseti(L,-2,3);
+        lua_rawseti(L,-2,1);
+    }
     return 1;
 }
 
-// findText("设置") → { {x, y}, ... }（Vision OCR，中英文）
-// 注：performRequests 本身同步，无需额外信号量
-static int l_findText(lua_State *L) {
-    const char *want = luaL_checkstring(L, 1);
-    // M2：want 可能不是合法 UTF-8，@(want) 会得到 nil → containsString:nil 抛异常 → SpringBoard 崩溃
-    NSString *wantStr = [NSString stringWithUTF8String:want];
-    if (!wantStr || wantStr.length == 0) { lua_pushnil(L); return 1; }
-    ATBitmap b = {0};
-    if (!ATCaptureScreen(&b)) { lua_pushnil(L); return 1; }
-    CGImageRef img = ATCreateCGImageFromBitmap(&b);
-    if (!img) { ATFreeBitmap(&b); lua_pushnil(L); return 1; }
-
-    __block NSMutableArray *hits = [NSMutableArray array];
-    double ptScale = ATCaptureScale(&b);    // 像素 → 点
-    VNRecognizeTextRequest *req = [[VNRecognizeTextRequest alloc] initWithCompletionHandler:
-        ^(VNRequest *request, NSError *error) {
-            if (error) return;
-            for (VNRecognizedText *t in request.results) {
-                NSString *s = [t topCandidates:1].firstObject.string;
-                if ([s containsString:wantStr]) {
-                    CGRect bb = t.boundingBox; // 归一化、原点左下 → 像素中心 → 点
-                    double cx = (bb.origin.x + bb.size.width / 2) * b.w / ptScale;
-                    double cy = (1 - bb.origin.y - bb.size.height / 2) * b.h / ptScale;
-                    [hits addObject:@[@(cx), @(cy)]];
-                }
-            }
-        }];
-    req.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-    req.recognitionLanguages = @[@"zh-Hans", @"en-US"];
-    req.usesLanguageCorrection = NO;
-    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:img options:@{}];
-    NSError *err = nil;
-    [handler performRequests:@[req] error:&err];
-    CGImageRelease(img);
-
-    lua_newtable(L);
-    int n = 0;
-    for (NSArray *pt in hits) {
-        lua_newtable(L);
-        NSNumber *x = pt.firstObject;
-        NSNumber *y = pt.lastObject;
-        // Minor 2 修复：与其余 API 统一 llround 四舍五入（intValue 直接截断会偏左上）
-        lua_pushinteger(L, (lua_Integer)llround(x.doubleValue)); lua_rawseti(L, -2, 1);
-        lua_pushinteger(L, (lua_Integer)llround(y.doubleValue)); lua_rawseti(L, -2, 2);
-        lua_rawseti(L, -2, ++n);
+// OCR results are staged in fixed native storage. No native bitmap survives Lua allocation.
+typedef struct { char text[512]; double x, y, width, height, confidence; } ATTextLine;
+typedef struct { int count; ATTextLine lines[64]; } ATTextResult;
+static BOOL ATRecognizeScreen(ATTextResult *out) {
+    ATBitmap bitmap = {0}; CGImageRef image = NULL; BOOL ok = NO;
+    @try {
+        @autoreleasepool {
+            if (!ATCaptureScreen(&bitmap)) return NO;
+            image = ATCreateCGImageFromBitmap(&bitmap);
+            if (!image) return NO;
+            double scale = ATCaptureScale(&bitmap);
+            VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc]
+                initWithCompletionHandler:^(VNRequest *req, NSError *error) {
+                    if (error) return;
+                    for (VNRecognizedText *observation in req.results) {
+                        if (out->count >= 64) break;
+                        VNRecognizedText *candidate = [observation topCandidates:1].firstObject;
+                        NSString *text = [candidate string];
+                        if (!text.length) continue;
+                        ATTextLine *line = &out->lines[out->count];
+                        if (![text getCString:line->text maxLength:sizeof(line->text) encoding:NSUTF8StringEncoding]) continue;
+                        CGRect box = observation.boundingBox;
+                        line->x = box.origin.x * bitmap.w / scale;
+                        line->y = (1-box.origin.y-box.size.height) * bitmap.h / scale;
+                        line->width = box.size.width * bitmap.w / scale;
+                        line->height = box.size.height * bitmap.h / scale;
+                        line->confidence = [candidate confidence];
+                        out->count++;
+                    }
+                }];
+            request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+            request.recognitionLanguages = @[@"zh-Hans", @"en-US"];
+            request.usesLanguageCorrection = NO;
+            VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
+            NSError *error = nil;
+            ok = [handler performRequests:@[request] error:&error];
+            if (!ok) ATLog(@"OCR failed: %@", error);
+        }
+    } @finally {
+        if (image) CGImageRelease(image);
+        ATFreeBitmap(&bitmap);
     }
-    if (n == 0) ATLog(@"findText: no match for %s", want);
-    ATFreeBitmap(&b);
+    return ok;
+}
+static int l_findText(lua_State *L) {
+    const char *want = luaL_checkstring(L,1);
+    BOOL valid = NO;
+    @autoreleasepool { valid = [NSString stringWithUTF8String:want].length > 0; }
+    if (!valid) return luaL_error(L,"findText: expected nonempty UTF-8 text");
+    ATTextResult hits = {0};
+    if (!ATRecognizeScreen(&hits)) return luaL_error(L,"findText: screen capture or OCR unavailable");
+    ATCheckScript(L);
+    lua_newtable(L); int count=0;
+    for (int i=0; i<hits.count; i++) if (strstr(hits.lines[i].text,want)) {
+        lua_createtable(L,2,0);
+        lua_pushinteger(L,(lua_Integer)llround(hits.lines[i].x+hits.lines[i].width/2)); lua_rawseti(L,-2,1);
+        lua_pushinteger(L,(lua_Integer)llround(hits.lines[i].y+hits.lines[i].height/2)); lua_rawseti(L,-2,2);
+        lua_rawseti(L,-2,++count);
+    }
     return 1;
+}
+static int l_ocrText(lua_State *L) {
+    ATTextResult hits = {0};
+    if (!ATRecognizeScreen(&hits)) return luaL_error(L,"ocrText: screen capture or OCR unavailable");
+    ATCheckScript(L);
+    lua_createtable(L,hits.count,0);
+    for (int i=0; i<hits.count; i++) {
+        ATTextLine *line=&hits.lines[i];
+        lua_createtable(L,0,6);
+        lua_pushstring(L,line->text); lua_setfield(L,-2,"text");
+        lua_pushnumber(L,line->x); lua_setfield(L,-2,"x");
+        lua_pushnumber(L,line->y); lua_setfield(L,-2,"y");
+        lua_pushnumber(L,line->width); lua_setfield(L,-2,"width");
+        lua_pushnumber(L,line->height); lua_setfield(L,-2,"height");
+        lua_pushnumber(L,line->confidence); lua_setfield(L,-2,"confidence");
+        lua_rawseti(L,-2,i+1);
+    }
+    return 1;
+}
+static int l_inputText(lua_State *L) {
+    size_t length=0; const unsigned char *text=(const unsigned char *)luaL_checklstring(L,1,&length);
+    if (!length || length>254) return luaL_error(L,"inputText: expected 1..254 printable ASCII bytes");
+    uint16_t usages[254]; int shifts[254];
+    for (size_t i=0; i<length; i++) if (!ATASCIIKey(text[i],&usages[i],&shifts[i]))
+        return luaL_error(L,"inputText: this lightweight build supports printable ASCII email text only");
+    if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent) return luaL_error(L,"inputText: HID keyboard unavailable");
+    for (size_t i=0; i<length; i++) {
+        ATCheckScript(L);
+        BOOL ok=(!shifts[i] || ATASCIIKeyEvent(YES,0xe1));
+        if (ok) ok=ATASCIIKeyEvent(YES,usages[i]);
+        if (ok) ok=ATASCIIKeyEvent(NO,usages[i]);
+        if (shifts[i]) ok=ATASCIIKeyEvent(NO,0xe1) && ok;
+        if (!ok) return luaL_error(L,"inputText: event creation failed");
+    }
+    lua_pushboolean(L,1); return 1; // dispatched, not a guarantee that a field had focus
+}
+static char gClaimedJobID[81], gClaimedEmail[255];
+static int l_getEmailJob(lua_State *L) {
+    char jobID[81]={0},email[255]={0}; BOOL found=NO;
+    @autoreleasepool {
+        NSError *error=nil;
+        NSDictionary *job=ATLEmailClaimJob(ATBaseDir(),&error);
+        if (job) {
+            found=[job[@"jobId"] getCString:jobID maxLength:sizeof(jobID) encoding:NSUTF8StringEncoding] &&
+                  [job[@"email"] getCString:email maxLength:sizeof(email) encoding:NSUTF8StringEncoding];
+            if (found) { strcpy(gClaimedJobID,jobID); strcpy(gClaimedEmail,email); }
+        } else ATLog(@"getEmailJob: %@",error.localizedDescription);
+    }
+    if (!found) { lua_pushnil(L); return 1; }
+    lua_createtable(L,0,2);
+    lua_pushstring(L,jobID); lua_setfield(L,-2,"jobId");
+    lua_pushstring(L,email); lua_setfield(L,-2,"email");
+    return 1;
+}
+static const char *ATLuaCheckText(lua_State *L, int index, size_t max, BOOL empty, size_t *length) {
+    if (lua_type(L,index)!=LUA_TSTRING) luaL_error(L,"email result: expected string");
+    const char *text=lua_tolstring(L,index,length);
+    if ((!empty && !*length) || *length>max || !ATValidUTF8Text((const unsigned char *)text,*length))
+        luaL_error(L,"email result: invalid UTF-8, control characters or length");
+    return text;
+}
+static int l_sendEmailResult(lua_State *L) {
+    size_t jobLength=0,emailLength=0,nameLength=0;
+    const char *jobID=ATLuaCheckText(L,1,80,NO,&jobLength);
+    const char *email=ATLuaCheckText(L,2,254,NO,&emailLength);
+    const char *username=ATLuaCheckText(L,3,1024,NO,&nameLength);
+    luaL_checktype(L,4,LUA_TTABLE);
+    size_t count=lua_rawlen(L,4);
+    if (count>100) return luaL_error(L,"sendEmailResult: max 100 OCR lines");
+    // Validate all Lua values before entering an ObjC pool (Lua errors longjmp).
+    for(size_t i=1;i<=count;i++) {
+        lua_rawgeti(L,4,(lua_Integer)i);
+        size_t n=0; ATLuaCheckText(L,-1,2048,YES,&n); lua_pop(L,1);
+    }
+    BOOL ok=NO;
+    @autoreleasepool {
+        NSMutableArray *lines=[NSMutableArray array];
+        for(size_t i=1;i<=count;i++) {
+            lua_rawgeti(L,4,(lua_Integer)i); size_t n=0; const char *text=lua_tolstring(L,-1,&n);
+            NSString *line=[[NSString alloc] initWithBytes:text length:n encoding:NSUTF8StringEncoding];
+            [lines addObject:line]; lua_pop(L,1);
+        }
+        NSError *error=nil;
+        ok=ATLEmailFinishJob(ATBaseDir(),[[NSString alloc] initWithBytes:jobID length:jobLength encoding:NSUTF8StringEncoding],
+             [[NSString alloc] initWithBytes:email length:emailLength encoding:NSUTF8StringEncoding],
+             [[NSString alloc] initWithBytes:username length:nameLength encoding:NSUTF8StringEncoding],lines,nil,&error);
+        if(!ok) ATLog(@"sendEmailResult: %@",error.localizedDescription);
+    }
+    if(!ok) return luaL_error(L,"sendEmailResult: invalid, cancelled or stale job (see log)");
+    gClaimedJobID[0]=gClaimedEmail[0]=0;
+    lua_pushboolean(L,1); return 1;
+}
+static int l_failEmailJob(lua_State *L) {
+    size_t jobLength=0,emailLength=0,failureLength=0;
+    const char *jobID=ATLuaCheckText(L,1,80,NO,&jobLength);
+    const char *email=ATLuaCheckText(L,2,254,NO,&emailLength);
+    const char *failure=ATLuaCheckText(L,3,2048,NO,&failureLength);
+    BOOL ok=NO;
+    @autoreleasepool {
+        NSError *error=nil;
+        ok=ATLEmailFinishJob(ATBaseDir(),[[NSString alloc] initWithBytes:jobID length:jobLength encoding:NSUTF8StringEncoding],
+              [[NSString alloc] initWithBytes:email length:emailLength encoding:NSUTF8StringEncoding],nil,nil,
+              [[NSString alloc] initWithBytes:failure length:failureLength encoding:NSUTF8StringEncoding],&error);
+        if(!ok) ATLog(@"failEmailJob: %@",error.localizedDescription);
+    }
+    if(ok) gClaimedJobID[0]=gClaimedEmail[0]=0;
+    lua_pushboolean(L,ok); return 1;
 }
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.10 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.11 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -932,37 +1064,28 @@ static const luaL_Reg ATLuaFuncs[] = {
     {"findColor", l_findColor},
     {"findImage", l_findImage},
     {"findText",  l_findText},
+    {"getEmailJob", l_getEmailJob},
+    {"sendEmailResult", l_sendEmailResult},
+    {"failEmailJob", l_failEmailJob},
     {"findColors",     l_notImplemented},
-    {"ocrText",        l_notImplemented},
+    {"ocrText",        l_ocrText},
     {"appRun",         l_notImplemented},
     {"appKill",        l_notImplemented},
     {"vibrate",        l_notImplemented},
     {"openURL",        l_notImplemented},
-    {"inputText",      l_notImplemented},
+    {"inputText",      l_inputText},
     {"toast",          l_notImplemented},
     {NULL, NULL},
 };
 
 // ---- Extensions.lua（R17：v2 版本标记 + 版本感知覆写）----
-static NSString * const ATExtensionsLua = @R"(-- ATLite Extensions.lua v2 (AutoTouch API parity layer + humanized input)
+static NSString * const ATExtensionsLua = @R"(-- ATLite Extensions.lua v3 (AutoTouch API parity layer + humanized input)
 print = log
 
 -- Lua 5.3 math.random 默认种子固定 —— /dev/urandom 播种
-do
-    local f = io.open("/dev/urandom", "rb")
-    local seeded = false
-    if f then
-        local s = f:read(8)
-        f:close()
-        if s and #s == 8 then
-            local n = 0
-            for i = 1, 8 do n = n * 256 + s:byte(i) end
-            math.randomseed(n % 0x7fffffff)
-            seeded = true
-        end
-    end
-    if not seeded then math.randomseed(os.time()) end
-end
+math.randomseed(_atlSeed)
+_atlSeed = nil
+
 
 KEY_TYPE = {
     HOME_BUTTON       = 0x40,
@@ -982,8 +1105,28 @@ ORIENTATION_TYPE = {
 -- 真人按住 60-120ms（固定 16ms 是最典型的机器特征）
 function tap(x, y)
     touchDown(0, x, y)
-    usleep(math.random(60000, 120000))
+    local ok, err = pcall(usleep, math.random(60000, 120000))
     touchUp(0, x, y)
+    if not ok then error(err, 0) end
+end
+
+function swipe(x1, y1, x2, y2, durationMs)
+    durationMs = durationMs or 400
+    assert(type(durationMs) == "number" and durationMs >= 16 and durationMs <= 10000,
+        "swipe duration must be 16..10000ms")
+    local steps = math.min(120, math.max(2, math.floor(durationMs / 16)))
+    touchDown(0, x1, y1)
+    local x, y = x1, y1
+    local ok, err = pcall(function()
+        for i = 1, steps do
+            local t = i / steps
+            x, y = x1 + (x2-x1)*t, y1 + (y2-y1)*t
+            touchMove(0, x, y)
+            msleep(durationMs / steps)
+        end
+    end)
+    touchUp(0, x, y)
+    if not ok then error(err, 0) end
 end
 
 function exit()
@@ -1025,7 +1168,7 @@ static void ATEnsureLuaLibraries(void) {
     BOOL needsWrite = YES;
     if ([[NSFileManager defaultManager] fileExistsAtPath:ext]) {
         NSString *cur = [NSString stringWithContentsOfFile:ext encoding:NSUTF8StringEncoding error:nil];
-        if (cur && [cur containsString:@"ATLite Extensions.lua v2"]) needsWrite = NO;
+        if (cur && [cur containsString:@"ATLite Extensions.lua v3"]) needsWrite = NO;
     }
     if (!needsWrite) return;
     if ([[NSFileManager defaultManager] fileExistsAtPath:ext]) {
@@ -1035,7 +1178,7 @@ static void ATEnsureLuaLibraries(void) {
         ATLog(@"Extensions.lua old version backed up to %@", bak);
     }
     [ATExtensionsLua writeToFile:ext atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    ATLog(@"Extensions.lua v2 written to %@", ext);
+    ATLog(@"Extensions.lua v3 written to %@", ext);
 }
 
 // 执行：先跑 Extensions.lua（可被用户覆盖），再跑脚本本体
@@ -1047,7 +1190,7 @@ static void ATEnsureLuaLibraries(void) {
 // ---------------------------------------------------------------------------
 #define AT_SCRIPT_TIMEOUT_SEC 60
 #define AT_SCRIPT_HOOK_COUNT  100000
-static CFAbsoluteTime gScriptDeadline = 0.0;
+// gScriptDeadline is defined beside ATMonotonicNow, before all C operations.
 
 // ---------------------------------------------------------------------------
 // E26：强停兜底。
@@ -1062,76 +1205,86 @@ static CFAbsoluteTime gScriptDeadline = 0.0;
 
 static void ATLuaTimeoutHook(lua_State *L, lua_Debug *ar) {
     (void)ar;
-    // ⚠ 复查发现（v0.3.6）：luaL_error 最终是 longjmp，绝不能发生在 @autoreleasepool 块内——
-    // 那会跳过 objc_autoreleasePoolPop，破坏 autorelease 栈（未定义行为，可崩溃）。
-    // 做法：在 pool 内只算标志，退出 pool 后再抛错。
-    BOOL shouldStop = NO, timedOut = NO;
-    @autoreleasepool {
-        shouldStop = ATShouldStop();
-        if (!shouldStop && gScriptDeadline > 0 &&
-            CFAbsoluteTimeGetCurrent() > gScriptDeadline) {
-            timedOut = YES;
-        }
+    ATCheckScript(L);
+}
+
+static void *ATLuaAllocator(void *ud, void *ptr, size_t oldSize, size_t newSize) {
+    return ATBudgetRealloc((ATMemoryBudget *)ud, ptr, oldSize, newSize);
+}
+
+static int ATInitializeLua(lua_State *L) {
+    luaL_requiref(L, "_G", luaopen_base, 1); lua_pop(L, 1);
+    luaL_requiref(L, LUA_TABLIBNAME, luaopen_table, 1); lua_pop(L, 1);
+    luaL_requiref(L, LUA_STRLIBNAME, luaopen_string, 1); lua_pop(L, 1);
+    luaL_requiref(L, LUA_MATHLIBNAME, luaopen_math, 1); lua_pop(L, 1);
+    luaL_requiref(L, LUA_UTF8LIBNAME, luaopen_utf8, 1); lua_pop(L, 1);
+    // No debug/os/io/package/coroutine. This is defense in depth, not a sandbox.
+    const char *removed[] = { "dofile", "loadfile", "load", "collectgarbage", NULL };
+    for (int i=0; removed[i]; i++) { lua_pushnil(L); lua_setglobal(L, removed[i]); }
+    lua_pushinteger(L, arc4random_uniform(0x7fffffff)); lua_setglobal(L, "_atlSeed");
+    luaL_newlib(L, ATLuaFuncs); lua_setglobal(L, "at");
+    lua_getglobal(L, "at"); lua_pushnil(L);
+    while (lua_next(L, -2) != 0) {
+        const char *key = lua_tostring(L, -2);
+        lua_pushvalue(L, -1); lua_setglobal(L, key); lua_pop(L, 1);
     }
-    if (shouldStop) luaL_error(L, "STOP");
-    if (timedOut) {
-        luaL_error(L, "ATLite: script exceeded %d s limit (aborted to protect SpringBoard)",
-                   (int)AT_SCRIPT_TIMEOUT_SEC);
+    lua_pop(L, 1);
+    return 0;
+}
+
+static BOOL ATExecuteLoadedChunk(lua_State *L, NSString *path) {
+    NSError *error = nil;
+    NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:path error:&error];
+    if (!attributes || [attributes fileSize] > 1024 * 1024) {
+        ATLog(@"script read rejected (missing or >1MiB): %@ (%@)", path, error); return NO;
     }
+    NSData *data = [NSData dataWithContentsOfFile:path options:0 error:&error];
+    NSString *text = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
+    if (!text || data.length > 1024 * 1024) {
+        ATLog(@"script read/UTF-8 validation failed: %@ (%@)", path, error); return NO;
+    }
+    int status = luaL_loadbufferx(L, data.length ? (const char *)data.bytes : "", data.length,
+                                 path.lastPathComponent.UTF8String, "t");
+    if (!status) status = lua_pcall(L, 0, 0, 0);
+    if (status) {
+        ATLog(@"lua error (%@): %s", path.lastPathComponent, lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "non-string Lua error");
+        lua_pop(L, 1); return NO;
+    }
+    return YES;
 }
 
 static void ATPlayLuaFile(NSString *scriptPath) {
-    if (!gHIDReady) { ATLog(@"play aborted: HID not ready"); return; }
-    if (![[NSFileManager defaultManager] fileExistsAtPath:scriptPath]) {
-        ATLog(@"script not found: %@", scriptPath);
-        return;
-    }
-    // E26：清掉上一次的停止标志（调用方已确保旧脚本退出，见 ATWaitForPreviousScripts）
-    ATClearStopFlag();
-    __sync_fetch_and_add(&gRunningScripts, 1);
-    ATWriteStatus(YES, scriptPath.lastPathComponent);
-    lua_State *L = luaL_newstate();
-    luaL_openlibs(L);
-    // E25-B/E26：装上超时+停止钩子（在跑任何用户代码之前）
-    gScriptDeadline = CFAbsoluteTimeGetCurrent() + AT_SCRIPT_TIMEOUT_SEC;
-    lua_sethook(L, ATLuaTimeoutHook, LUA_MASKCOUNT, AT_SCRIPT_HOOK_COUNT);
-    luaL_newlib(L, ATLuaFuncs);
-    lua_setglobal(L, "at");
-    // 复制到 _G 顶层: touchDown(...) 直接可用（AutoTouch 风格）
-    lua_getglobal(L, "at");
-    lua_pushnil(L);
-    while (lua_next(L, -2) != 0) {
-        lua_pushvalue(L, -1);
-        lua_setglobal(L, lua_tostring(L, -2));
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-
-    NSString *ext = [ATLibsDir() stringByAppendingPathComponent:@"Extensions.lua"];
-    NSData *extData = [NSData dataWithContentsOfFile:ext];
-    if (extData) {
-        if (luaL_dostring(L, [[NSString alloc] initWithData:extData encoding:NSUTF8StringEncoding].UTF8String)) {
-            ATLog(@"Extensions.lua error: %s", lua_tostring(L, -1));
+    ATMemoryBudget budget = {0, 32 * 1024 * 1024};
+    lua_State *L = NULL;
+    @try {
+        gClaimedJobID[0]=gClaimedEmail[0]=0;
+        ATWriteStatus(YES, scriptPath.lastPathComponent);
+        gScriptDeadline = ATMonotonicNow() + AT_SCRIPT_TIMEOUT_SEC;
+        L = lua_newstate(ATLuaAllocator, &budget);
+        if (!L) { ATLog(@"Lua VM allocation failed"); return; }
+        lua_sethook(L, ATLuaTimeoutHook, LUA_MASKCOUNT, 10000);
+        lua_pushcfunction(L, ATInitializeLua);
+        if (lua_pcall(L, 0, 0, 0)) { ATLog(@"Lua bootstrap failed: %s", lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "non-string Lua error"); return; }
+        NSString *extensions = [ATLibsDir() stringByAppendingPathComponent:@"Extensions.lua"];
+        if (!ATExecuteLoadedChunk(L, extensions)) return;
+        if (ATExecuteLoadedChunk(L, scriptPath)) ATLog(@"script finished: %@", scriptPath.lastPathComponent);
+    } @catch (NSException *exception) {
+        ATLog(@"script exception: %@", exception);
+    } @finally {
+        // Release injected inputs even when Lua stops during tap()'s sleep.
+        @try { ATReleaseAllInputs(); }
+        @catch (NSException *exception) { ATLog(@"input cleanup exception: %@", exception); }
+        if (L) lua_close(L);
+        if(gClaimedJobID[0]) {
+            NSError *error=nil;
+            ATLEmailFinishJob(ATBaseDir(),[NSString stringWithUTF8String:gClaimedJobID],
+                [NSString stringWithUTF8String:gClaimedEmail],nil,nil,@"script ended or stopped before reporting a username",&error);
+            gClaimedJobID[0]=gClaimedEmail[0]=0;
         }
+        gScriptDeadline = 0;
+        ATWriteStatus(NO, scriptPath.lastPathComponent);
+        __sync_lock_test_and_set(&gRunningScripts, 0);
     }
-
-    NSData *data = [NSData dataWithContentsOfFile:scriptPath];
-    NSString *src = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    int err = luaL_dostring(L, src.UTF8String);
-    if (err) {
-        const char *msg = lua_tostring(L, -1);
-        if (msg && strcmp(msg, "STOP") == 0) {
-            ATLog(@"script stopped by stop(): %@", scriptPath.lastPathComponent);
-        } else {
-            ATLog(@"lua error: %s", msg ? msg : "?");
-        }
-    } else {
-        ATLog(@"script finished: %@", scriptPath.lastPathComponent);
-    }
-    gScriptDeadline = 0; // E25-B：本次执行结束，解除时限
-    __sync_fetch_and_sub(&gRunningScripts, 1);
-    ATWriteStatus(NO, scriptPath.lastPathComponent); // E26：状态回到空闲
-    lua_close(L);
 }
 
 #pragma mark - Command handling (SpringBoard)
@@ -1170,25 +1323,41 @@ static void ATReapChildAsync(pid_t pid) {
 // P2（阶段 0 探针）：SpringBoard 内能否 posix_spawn —— 这是 B 模式保活唯一的悬空点。
 // 与 App 侧共用同一份二进制；stdout 交给探针自己写 probe.log，这里只关心 rc/errno。
 static void ATProbeSpawnFromSpringBoard(void) {
-    NSString *exe = [[NSBundle mainBundle].bundlePath
-                     stringByAppendingPathComponent:@"ATLiteProbe"];
+    NSString *exe = [ATJBRoot() stringByAppendingPathComponent:@"Applications/ATLite.app/ATLiteProbe"];
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:exe]) { ATLog(@"PROBE_P2 FAIL 二进制缺失: %@", exe); return; }
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    NSString *probeLog = [ATLogsDir() stringByAppendingPathComponent:@"tweak.log"];
+    posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, probeLog.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    NSString *runId = NSUUID.UUID.UUIDString;
     char *argv[] = { (char *)"ATLiteProbe",
-                     (char *)"--base", (char *)ATBaseDir().UTF8String,
+                     (char *)"--run-id", (char *)runId.UTF8String,
                      (char *)"--from", (char *)"springboard", NULL };
     pid_t pid = 0;
     int rc = posix_spawn(&pid, exe.fileSystemRepresentation, &fa, NULL, argv, NULL);
     posix_spawn_file_actions_destroy(&fa);
     ATLog(@"PROBE_P2 spawn rc=%d errno=%d exec=%@ pid=%d path=%@",
           rc, rc, [fm isExecutableFileAtPath:exe] ? @"YES" : @"NO", pid, exe);
-    ATReapChildAsync(rc == 0 ? pid : 0); // R33-C：异步回收，不阻塞调用线程
+    ATReapChildAsync(rc == 0 ? pid : 0);
+    if (rc == 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 8 * NSEC_PER_SEC), ATReapQueue(), ^{
+        int status = 0;
+        if (waitpid(pid, &status, WNOHANG) == 0) {
+            int result = kill(pid, SIGKILL);
+            ATLog(@"PROBE_P2 timeout run=%@ pid=%d kill=%d", runId, pid, result);
+        }
+    });
+}
+
+static BOOL ATValidScriptName(NSString *name) {
+    if (![name isKindOfClass:NSString.class] || !name.length || name.length > 128 ||
+        [name containsString:@"/"] || [name containsString:@"\\"] || [name containsString:@".."] ||
+        [name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) return NO;
+    return [@[@"at", @"lua"] containsObject:name.pathExtension.lowercaseString];
 }
 
 static void ATHandleCommand(void) {
+    if (!ATIsSpringBoard()) return;
     NSString *cmdPath = [ATBaseDir() stringByAppendingPathComponent:@"command.json"];
     NSData *data = [NSData dataWithContentsOfFile:cmdPath];
     if (!data) return;
@@ -1196,16 +1365,14 @@ static void ATHandleCommand(void) {
     if (![cmd isKindOfClass:[NSDictionary class]]) return;
     NSString *action = cmd[@"cmd"];
     NSString *script = cmd[@"script"] ?: @"";
-    if (!action.length) return;
+    if (![action isKindOfClass:NSString.class] || !action.length) return;
     ATLog(@"command: %@ (%@)", action, script);
 
     // E26：强停。不要求 ATIsSpringBoard —— 任何注入进程收到都先落内存标志，
     // 但要真正中止脚本只有 SpringBoard 里那个 hook 会读到它。
     if ([action isEqualToString:@"stop"]) {
-        gStopRequested = 1;
-        [[NSFileManager defaultManager] removeItemAtPath:ATStopFlagPath() error:nil];
-        ATLog(@"stop requested (forced stop)");
-        ATWriteStatus(NO, @"");
+        __sync_lock_test_and_set(&gStopRequested, 1);
+        ATLog(@"stop requested (cooperative cancellation; waiting for actual exit)");
         return;
     }
 
@@ -1219,21 +1386,21 @@ static void ATHandleCommand(void) {
     }
 
     if ([action isEqualToString:@"run"]) {
-        if (!ATIsSpringBoard()) return;
-        NSString *n = [script.pathExtension.lowercaseString isEqualToString:@"at"]
-            ? script : [script stringByAppendingPathExtension:@"at"];
-        NSString *path = [ATScriptsDir() stringByAppendingPathComponent:n];
+        if (!ATValidScriptName(script)) { ATLog(@"run rejected: invalid script name"); return; }
+        NSString *root = ATScriptsDir().stringByResolvingSymlinksInPath;
+        NSString *path = [root stringByAppendingPathComponent:script].stringByResolvingSymlinksInPath;
+        if (![path hasPrefix:[root stringByAppendingString:@"/"]]) { ATLog(@"run rejected: path escaped Scripts"); return; }
+        if (!__sync_bool_compare_and_swap(&gRunningScripts, 0, 1)) {
+            ATLog(@"run rejected: previous script is still active; stop and wait for exit"); return;
+        }
+        // Clear the old cancellation before accepting this run. A subsequent stop persists.
+        ATClearStopFlag();
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            @autoreleasepool {
-                // 复查修复：等旧脚本先退干净，再重置停止信号开跑新脚本
-                // （否则 ATClearStopFlag 会把"正在停旧脚本"的信号一起清掉，旧脚本复活）
-                ATWaitForPreviousScripts(3.0);
-                // M2：用户脚本是不可信输入，运行链路任何异常都不许击穿到 SpringBoard
-                @try { ATPlayLuaFile(path); }
-                @catch (NSException *e) { ATLog(@"script exception: %@", e); }
-            }
+            @autoreleasepool { ATPlayLuaFile(path); }
         });
     }
+
+
 }
 
 #pragma mark - Darwin notification
@@ -1250,6 +1417,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
 
 %ctor {
     @autoreleasepool {
+        if (!ATIsSpringBoard()) return;
         NSFileManager *fm = [NSFileManager defaultManager];
         for (NSString *dir in @[ATBaseDir(), ATScriptsDir(), ATLibsDir(), ATImagesDir(), ATLogsDir()]) {
             [fm createDirectoryAtPath:dir withIntermediateDirectories:YES
@@ -1263,7 +1431,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.10 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.11 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

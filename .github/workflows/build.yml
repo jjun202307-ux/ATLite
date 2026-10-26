@@ -61,25 +61,18 @@ jobs:
           test -f "$THEOS/lib/iphone/roothide/libroot_oldabi.a"
           echo SETUP_SCHEME_OK
 
-      # 注意: lua/lua 仓库所有源码都在根目录(没有 src/ 子目录, src/ 布局仅存在于官方 tarball)。
-      # 必须删除: lua.c/luac.c/onelua.c(含 main(), 链接 dylib 会符号冲突)
-      #           ltests.c(调试文件, 不在官方默认构建列表, 会重定义内部符号)
-      - name: Vendor Lua 5.3.6
+      - name: Verify pinned Lua 5.3.6
         run: |
-          git clone --depth=1 --branch v5.3.6 https://github.com/lua/lua.git tweak/lib/lua53
-          cd tweak/lib/lua53
-          rm -rf .git manual testes makefile all
-          rm -f lua.c luac.c onelua.c ltests.c ltests.h
-          ls *.h | head -5
-          ls *.c | wc -l
+          set -eux
+          python3 -c "import hashlib,json,pathlib; p=pathlib.Path('tweak/lib/lua53'); m=json.loads((p/'SHA256.json').read_text()); assert len(list(p.glob('*.c')))==33; assert all(hashlib.sha256((p/k).read_bytes()).hexdigest()==v for k,v in m.items())"
+          # loslib keeps system(cmd) only outside iOS; the exposed library whitelist excludes os.
+          grep -q '__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__' tweak/lib/lua53/loslib.c
 
-      # iOS SDK 将 system() 标记为 unavailable(硬错误): 把 os.execute 改为恒失败桩
-      - name: Patch loslib.c for iOS
+      - name: Behavioral regressions
         run: |
-          cd tweak/lib/lua53
-          grep -n "int stat = system(cmd);" loslib.c
-          sed -i 's|int stat = system(cmd);|int stat = -1; if (cmd == NULL) { lua_pushboolean(L, 0); return 1; } /* system() unavailable on iOS */|' loslib.c
-          ! grep -q "system(cmd)" loslib.c
+          set -eux
+          python3 -m pip install lupa==2.8
+          python3 -m unittest discover -s tests -v
 
       # 构建纪律铁律第 2 条：CI 脚本天生可诊断。断言先于构建跑，
       # 让"断言不过"与"编译不过"在日志里是两个独立且可区分的步骤。
@@ -93,6 +86,7 @@ jobs:
         run: |
           set -x
           make package FINALPACKAGE=1
+          for deb in packages/*.deb; do python3 tools/verify_artifact.py "$deb"; done
           # 探针必须 stage 进 app bundle（出 /var/containers/Bundle 会 exec EPERM）
           find .theos -name 'ATLiteProbe' -print
           test -n "$(find .theos -name 'ATLiteProbe' -print -quit)"

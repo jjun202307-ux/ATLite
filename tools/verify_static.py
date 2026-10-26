@@ -30,7 +30,7 @@ def read(root, rel):
     if not os.path.isfile(p):
         return ""
     with open(p, "rb") as f:
-        return f.read().decode("utf8", "replace")
+        return f.read().decode("utf8", "replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def strip_comments(src):
@@ -109,8 +109,8 @@ def main(root):
     # ---- R14/E14: Vision SDK 兼容类别 ----
     check("R14-E14 VNRecognizedText类别", "VNRecognizedText (ATLiteSDKCompat)" in tweak)
 
-    # ---- R17/E17: Extensions.lua v2 版本感知 ----
-    check("R17-E17 v2标记", "ATLite Extensions.lua v2" in tweak)
+    # ---- R17/E17: Extensions.lua v3 版本感知 ----
+    check("R17-E17 v3标记", "ATLite Extensions.lua v3" in tweak)
     check("R17-E17 版本感知覆写+.bak", "needsWrite" in tweak and '".bak"' in tweak)
 
     # ---- R15/E15: 每个 app .m 导入其使用的自定义类头文件 ----
@@ -183,7 +183,7 @@ def main(root):
     # ---- 评审修复守卫（两段式评审 M1/M2）----
     check("M1 ARGB绿通道修正(gIdx)", "gIdx" in tweak_code and "AT_FMT_ARGB" in tweak_code)
     check("M2 findText nil防御", "stringWithUTF8String:want" in tweak_code)
-    check("M2 脚本运行@try防御", "@try { ATPlayLuaFile" in tweak_code)
+    check("M2 脚本运行try/finally防御", bool(re.search(r"static void ATPlayLuaFile\([^)]*\)\s*\{.*?@try\s*\{.*?@finally\s*\{", tweak_code, re.S)))
     check("M3 seed前建目录", "seedBundledScripts" in vc and
           vc.find("createDirectoryAtPath:ATLScriptsDir") < vc.find("copyItemAtPath:bundled"))
 
@@ -243,7 +243,7 @@ def main(root):
 
     # Minor2: findText 输出与其余 API 统一 llround（禁 intValue 截断）
     check("Minor2 findText llround 统一",
-          "llround(x.doubleValue)" in tweak_code and "x.intValue" not in tweak_code)
+          "llround(hits.lines[i].x+hits.lines[i].width/2)" in tweak_code and "x.intValue" not in tweak_code)
 
     # Minor1: 仅支持 iPhone，无 CFBundleIcons~ipad 段
     check("Minor1 无 CFBundleIcons~ipad", "CFBundleIcons~ipad" not in plist_raw)
@@ -256,8 +256,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.10三处同步",
-          "Version: 0.3.10" in ctrl and "<string>0.3.10</string>" in plist_raw and "v0.3.10" in tweak)
+    check("V 版本0.3.11三处同步",
+          "Version: 0.3.11" in ctrl and "<string>0.3.11</string>" in plist_raw and "v0.3.11" in tweak)
 
     # ---- R32: 阶段 0 探针包 v0.3.10（A/B 双模式可行性验证 P1-P5）----
     # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义
@@ -277,18 +277,20 @@ def main(root):
     check("R32 probe 自带 entitlements 且免 Killed:9",
           "platform-application" in probe_ent and "no-sandbox" in probe_ent)
     check("R32 根 Makefile 含 probe 子工程", "probe" in root_mk)
-    check("R32 postinst 对探针 setuid",
-          "chmod u+s" in postinst and "ATLiteProbe" in postinst)
+    check("R32 postinst 清除探针setuid默认部署",
+          "chmod 0755 /Applications/ATLite.app/ATLiteProbe" in postinst and "chmod u+s" not in strip_comments(postinst))
     check("R32 P3 身份标记（euid 判据）", "PROBE_P3" in probe_main and "geteuid()" in probe_main)
     check("R32 P4 HID 注入探针",
           "PROBE_P4" in probe_main and "IOHIDEventSystemClientDispatchEvent" in probe_main)
-    check("R32 P5 Framebuffer 主路径",
-          "PROBE_P5" in probe_main and "IOMobileFramebufferGetLayerDefaultSurface" in probe_main)
+    check("R32 P5 framebuffer入口未验证时明确unsupported",
+          "PROBE_P5" in probe_main and "framebuffer entry=UNSUPPORTED" in probe_main
+          and not re.search(r"_ATFBOpen\(0\s*,", strip_comments(probe_main)))
     check("R32 P5 RenderDisplay 回退路径", "CARenderServerRenderDisplay" in probe_main)
     check("R32 探针不依赖 SDK 私有类型",
           "ATSurfaceRef" in probe_main and "ATFBConn" in probe_main and "AT_TRANSDUCER_HAND" in probe_main)
-    check("R32 探针结果落盘且 mobile 可读",
-          "probe.log" in probe_main and "0644" in probe_main)
+    check("R32 探针stdout由App有界落盘",
+          "fflush(stdout)" in probe_main and "probe-app.log" in app_probe
+          and "AT_PROBE_MAX_OUTPUT" in app_probe and "writeToFile:path atomically:YES" in app_probe)
     check("R32 App 侧用 posix_spawn（禁私有 NSTask）",
           "posix_spawn" in app_probe and "NSTask" not in app_probe)
     check("R32 App 侧 P1 标记", "PROBE_P1" in app_probe)
@@ -298,13 +300,14 @@ def main(root):
     check("R32 日志页有探针入口", "ATLRunProbe" in logvc_raw)
     check("R32 app Makefile FILES 含 ATLProbe.m", "Source/ATLProbe.m" in app_mk)
 
-    # ---- R33: debug-error-recovery 复查 v0.3.10 探针包发现的缺陷 ----
-    # A 假阳性：probe.log 是 append 模式，用 containsString 在**全文件**上判
-    #           "from=springboard"，第二次点击会命中上一次的历史残留 →
-    #           本次 P2 尚未落盘就被判定完成，显示旧结论。必须按字节偏移切分。
-    check("R33-A probe.log 按偏移切分（禁全文件 containsString 判完成）",
-          "startLen" in logvc_raw and "subdataWithRange" in logvc_raw
-          and "NSMakeRange(startLen" in logvc_raw)
+    # ---- R33: Preserve prior failure coverage using the current stdout contract. ----
+    # A: App terminal recognition is run/caller-specific. P2 remains explicitly
+    # asynchronous and is inspected in tweak.log, never inferred from begin.
+    check("R33-A P2不以begin或历史日志冒充完成",
+          'containsString:@"from=springboard"' not in logvc_raw
+          and 'P2' in logvc_raw and 'tweak.log' in logvc_raw
+          and '未确认完成' in logvc_raw
+          and 'run_id=%@ from=%@ PROBE_END' in app_probe)
     # B SpringBoard 侧 spawn 不传 --w/--h，回退 RenderDisplay 用硬编码 1170x2532，
     #   非该分辨率机型必失败 → 误判"P5 双失败"，污染阶段 2 决策。需自动重试多个尺寸。
     check("R33-B probe 回退多分辨率重试（不依赖调用方传尺寸）",
@@ -314,21 +317,24 @@ def main(root):
     #   （常驻进程，不会自动 reap）。用 DISPATCH_SOURCE_TYPE_PROC 异步回收，零阻塞。
     check("R33-C SpringBoard 侧回收子进程（禁 spawn 后不 reap）",
           "DISPATCH_SOURCE_TYPE_PROC" in tweak and "DISPATCH_PROC_EXIT" in tweak)
-    # D GetHeight 未判空：与其同 framework 的 GetWidth 判了它没判 →
-    #   空函数指针调用 = EXC_BAD_ACCESS = 探针崩溃 = P5 全量结论丢失（含回退路径）
+    # D: All surface readers must be guarded together before use.
     check("R33-D probe 抓屏读数三个符号全部判空",
-          "_ATSurfaceGetWidth && _ATSurfaceGetHeight" in probe_main)
-    # E App 读 probe.log 只用 ATLLogsDir()（单侧推导），而 tweak.log 早已用
-    #   ATLLogCandidatePaths() 多路径探测；两侧 jbroot 推导不同时 P2 部分读不到
-    check("R33-E probe.log 读取用多路径探测（与 tweak.log 同机制）",
-          "ATLProbeLogPath" in logvc_raw or "probeLogPath" in logvc_raw)
+          bool(re.search(r"if\s*\([^)]*!_ATSurfaceGetBase[^)]*!_ATSurfaceGetWidth[^)]*!_ATSurfaceGetHeight", strip_comments(probe_main))))
+    # E: P2 diagnostics retain the existing shared log candidate mechanism.
+    check("R33-E P2明确转到共享tweak日志候选路径",
+          "ATLExistingLogPath" in logvc_raw and "ATLLogCandidatePaths" in logvc_raw
+          and "P2" in logvc_raw and "tweak.log" in logvc_raw)
     # F App 侧阻塞 read(fds[0]) 无超时：若 probe 卡在 RenderDisplay 同步 IPC
     #   （正是 E25/E30 担心的死锁场景），后台线程永久阻塞且无法取消。违反 R30。
-    check("R33-F App 侧读子进程输出带超时并可 kill",
-          "select(" in app_probe and "AT_PROBE_READ_TIMEOUT" in app_probe
-          and "SIGKILL" in app_probe)
-    # G probe.log 0666 让任意进程可写，诊断日志只需 mobile 可读 → 0644 足够
-    check("R33-G probe.log 权限收紧至 0644", "0644" in probe_main)
+    check("R33-F App侧超时输出和有界回收并检查kill失败",
+          "select(" in app_probe and "ATProbeNow() + 8.0" in app_probe
+          and "killRC = kill(pid, SIGKILL)" in app_probe and "killError = killRC ? errno" in app_probe
+          and "WNOHANG" in app_probe and "reapDeadline" in app_probe
+          and not re.search(r"waitpid\([^;]+,\s*0\)", app_probe))
+    check("R33-G 探针禁止任意特权路径写入",
+          not re.search(r"\b(?:fopen|chmod|writeToFile)\s*[:(]", strip_comments(probe_main))
+          and '"--base"' not in strip_comments(probe_main)
+          and "NOT-ROOT diagnostic-limit" in probe_main)
 
     # ---- R24/E24: App 内可查看 tweak 日志（脚本"没反应"时的调试手段）----
     logvc_path = os.path.join(root, "app/Source/ATLLogViewController.m")
@@ -351,8 +357,13 @@ def main(root):
           "ATCaptureSurfaceWithTimeout" in tweak_code and "gCaptureBroken" in tweak_code)
     check("R25-A 抓屏超时后永久停用", "gCaptureBroken = YES" in tweak_code)
     check("R25-B 脚本执行时限钩子", "lua_sethook" in tweak_code and "ATLuaTimeoutHook" in tweak_code)
-    check("R25-B 时限钩子在跑用户代码前装配",
-          tweak_code.find("lua_sethook") < tweak_code.find("luaL_dostring"))
+    play = tweak_code[tweak_code.find("static void ATPlayLuaFile("):]
+    check("R25-B hook在bootstrap和用户chunk执行前装配",
+          0 <= play.find("lua_sethook(") < play.find("lua_pcall(")
+          < play.find("ATExecuteLoadedChunk(L, extensions)") < play.find("ATExecuteLoadedChunk(L, scriptPath)"))
+    check("R25-B 用户chunk只文本加载并受pcall保护",
+          bool(re.search(r'luaL_loadbufferx\([^;]+,\s*"t"\);\s*if\s*\(!status\)\s*status = lua_pcall', tweak_code, re.S))
+          and "luaL_dostring" not in tweak_code and "luaL_dofile" not in tweak_code)
     check("R25-C HID 事件节流", "ATThrottleEvents" in tweak_code)
 
     # ---- R26/E26: 强停兜底（脚本跑在 SpringBoard，杀 App 无效）----
@@ -397,19 +408,21 @@ def main(root):
 
     # ---- 复查修复守卫（v0.3.5 debug 复查发现）----
     # 1) luaL_error 是 longjmp，必须发生在 @autoreleasepool 之外，否则破坏 autorelease 栈
-    hook_src = tweak_code[tweak_code.find("ATLuaTimeoutHook"):]
-    hook_src = hook_src[:hook_src.find("\n}\n")] if "\n}\n" in hook_src else hook_src[:600]
-    pool_i = hook_src.find("@autoreleasepool")
-    err_i = hook_src.find("luaL_error")
-    check("复查-1 hook 内 luaL_error 在 autoreleasepool 之外",
-          pool_i != -1 and err_i != -1 and pool_i < err_i)
-    # 2) 停止后立刻跑新脚本，旧脚本不得因信号被清而复活
-    check("复查-2 旧脚本退出等待机制", "ATWaitForPreviousScripts" in tweak_code)
-    check("复查-2 运行计数原子增减",
-          "__sync_fetch_and_add(&gRunningScripts, 1)" in tweak_code and
-          "__sync_fetch_and_sub(&gRunningScripts, 1)" in tweak_code)
-    check("复查-2 等待在 dispatch 块内(非主线程)",
-          tweak_code.find("ATWaitForPreviousScripts(3.0)") < tweak_code.find("ATPlayLuaFile(path)"))
+    guard = re.search(r"static void ATCheckScript\([^)]*\)\s*\{(.*?)\n\}", tweak_code, re.S)
+    hook = re.search(r"static void ATLuaTimeoutHook\([^)]*\)\s*\{(.*?)\n\}", tweak_code, re.S)
+    check("复查-1 hook经ATCheckScript在pool外报错",
+          bool(guard and hook and "ATCheckScript(L)" in hook.group(1)
+               and re.search(r"@autoreleasepool\s*\{[^}]+\}\s*if\s*\(cancelled\)\s*luaL_error", guard.group(1), re.S)
+               and "ATScriptExpired()" in guard.group(1)))
+    admission = tweak_code.find("__sync_bool_compare_and_swap(&gRunningScripts, 0, 1)")
+    check("复查-2 CAS拒绝并发脚本而非覆盖旧run",
+          admission >= 0 and "previous script is still active" in tweak_code
+          and "ATWaitForPreviousScripts" not in tweak_code)
+    check("复查-2 finally原子释放运行槽",
+          bool(re.search(r"@finally\s*\{.*?ATReleaseAllInputs\(\).*?lua_close\(L\).*?__sync_lock_test_and_set\(&gRunningScripts, 0\)", play, re.S)))
+    check("复查-2 原子准入和清stop发生在调度之前",
+          admission >= 0 and admission < tweak_code.find("ATClearStopFlag();", admission)
+          < tweak_code.find("dispatch_async", admission) < tweak_code.find("ATPlayLuaFile(path)", admission))
 
     # ---- Lua 接线（编译正确性守卫）----
     check("Lua extern C 包裹", 'extern "C" {' in tweak and "<lua.h>" in tweak)

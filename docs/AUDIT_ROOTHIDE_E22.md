@@ -1,3 +1,5 @@
+> 历史资料：保留原始研究与决策记录，不代表 v0.3.11 当前实现。以 TECHNICAL.md 与 LIGHTWEIGHT_PLAN.md 为准。
+
 # roothide 兼容性二次核验报告（E22/R22）
 
 > 方法：`debug-error-recovery` 六阶段 + `pc-debugging-expert` 四步法

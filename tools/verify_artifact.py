@@ -18,6 +18,8 @@ import io
 import os
 import sys
 import tarfile
+import struct
+import plistlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from verify_roothide_layout import parse_ar, decompress  # noqa: E402
@@ -36,6 +38,52 @@ def in_blob(blob, s):
     return s.encode("utf-8") in blob or s.encode("utf-16-le") in blob
 
 
+def macho_slices(blob):
+    """Read architectures and XML entitlements from load-command-referenced signatures."""
+    def require(ok):
+        if not ok:
+            raise ValueError("invalid/truncated Mach-O")
+    require(len(blob) >= 8)
+    if blob[:4] == b"\xca\xfe\xba\xbe":
+        count = struct.unpack_from(">I", blob, 4)[0]
+        require(0 < count <= 16 and len(blob) >= 8 + count * 20)
+        result = []
+        for i in range(count):
+            cpu, subtype, offset, length, _ = struct.unpack_from(">5I", blob, 8 + i * 20)
+            require(offset >= 8 + count * 20 and length > 0 and offset + length <= len(blob))
+            slices = macho_slices(blob[offset:offset + length])
+            require(len(slices) == 1 and slices[0]['cpu'] == cpu and slices[0]['subtype'] == subtype)
+            result.extend(slices)
+        return result
+    require(len(blob) >= 32 and blob[:4] == b"\xcf\xfa\xed\xfe")
+    _, cpu, subtype, filetype, count, size, _, _ = struct.unpack_from("<8I", blob)
+    end = 32 + size
+    require(end <= len(blob) and count <= size // 8)
+    result = {'cpu': cpu, 'subtype': subtype, 'filetype': filetype, 'entitlements': {}}
+    offset = 32
+    for _ in range(count):
+        require(offset + 8 <= end)
+        cmd, length = struct.unpack_from("<2I", blob, offset)
+        require(length >= 8 and offset + length <= end)
+        if cmd == 0x1d:
+            require(length >= 16)
+            start, total = struct.unpack_from("<2I", blob, offset + 8)
+            require(start >= end and start + total <= len(blob) and total >= 12)
+            sig = blob[start:start + total]
+            magic, slen, n = struct.unpack_from(">3I", sig)
+            require(magic == 0xfade0cc0 and 12 <= slen <= total and n <= (slen - 12) // 8)
+            for i in range(n):
+                kind, pos = struct.unpack_from(">2I", sig, 12 + i * 8)
+                require(pos >= 12 + n * 8 and pos + 8 <= slen)
+                if kind == 5:
+                    emagic, elen = struct.unpack_from(">2I", sig, pos)
+                    require(emagic == 0xfade7171 and elen >= 8 and pos + elen <= slen)
+                    result['entitlements'] = plistlib.loads(sig[pos + 8:pos + elen])
+        offset += length
+    require(offset == end)
+    return [result]
+
+
 def main(deb_path):
     m = parse_ar(deb_path)
     ctl = tarfile.open(fileobj=io.BytesIO(
@@ -52,6 +100,33 @@ def main(deb_path):
     dt = tarfile.open(fileobj=io.BytesIO(
         decompress([v for k, v in m.items() if k.startswith("data.tar")][0])))
     names = dt.getnames()
+    files = {x.name.lstrip("./"): x for x in dt.getmembers() if x.isfile()}
+    for executable, kind in [('Applications/ATLite.app/ATLite', 2),
+                             ('Applications/ATLite.app/ATLiteProbe', 2),
+                             ('Library/MobileSubstrate/DynamicLibraries/ATLiteTweak.dylib', 6)]:
+        member = files.get(executable)
+        check('executable present: ' + executable, member is not None and bool(member.mode & 0o111))
+        if member:
+            try:
+                slices = macho_slices(dt.extractfile(member).read())
+                check('arm64 + arm64e: ' + executable,
+                      len(slices) == 2 and {s['cpu'] for s in slices} == {0x100000c}
+                      and {s['subtype'] & 0xffffff for s in slices} == {0, 2}
+                      and all(s['filetype'] == kind for s in slices))
+                if kind == 2:
+                    need = ['platform-application', 'com.apple.private.security.no-sandbox']
+                    if executable.endswith('/ATLite'):
+                        need += ['com.apple.private.security.storage.AppBundles',
+                                 'com.apple.private.security.storage.AppDataContainers']
+                    check('signed entitlements true: ' + executable,
+                          all(s['entitlements'].get(k) is True for s in slices for k in need))
+            except (ValueError, struct.error, plistlib.InvalidFileException) as error:
+                check('parse Mach-O: ' + executable, False, str(error))
+    post = next((x for x in ctl if x.name.lstrip('./') == 'postinst'), None)
+    check('postinst executable', post is not None and bool(post.mode & 0o111))
+    if post:
+        script = ctl.extractfile(post).read().decode('utf-8')
+        check('probe not setuid by default', 'chmod 0755' in script and 'chmod u+s' not in script)
 
     # ---- roothide 布局（E22/R22）：无前缀 rootful 式 ----
     check("无前缀布局（无 rootfs/var/jb）", not any("rootfs" in n for n in names))
