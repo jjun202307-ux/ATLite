@@ -1385,6 +1385,7 @@ typedef struct ATProbeReaper {
     pid_t pid;
     unsigned polls;
     unsigned postKillPolls;
+    unsigned interruptPolls;
     int killSent;
 } ATProbeReaper;
 
@@ -1402,6 +1403,15 @@ static void ATProbeReapPoll(void *context) {
         ATLog(@"PROBE_P2 waitpid failed pid=%d errno=%d; child may remain unreaped", state->pid, errno);
         free(state);
         return;
+    }
+    if (result < 0 && errno == EINTR) {
+        if (++state->interruptPolls >= 80) {
+            ATLog(@"PROBE_P2 waitpid repeatedly interrupted pid=%d; child may remain unreaped", state->pid);
+            free(state);
+            return;
+        }
+    } else {
+        state->interruptPolls = 0;
     }
     if (result == 0 && !state->killSent && ++state->polls >= 80) {
         state->killSent = 1;

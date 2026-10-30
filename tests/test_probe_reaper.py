@@ -26,7 +26,7 @@ class ProbeReaperTest(unittest.TestCase):
         static long long dispatch_time(long long a, long long b) { return a+b; }
         static void dispatch_after_f(long long t, dispatch_queue_t q, void *c, void (*f)(void *)) { (void)t; (void)q; if (pending) abort(); pending=f; context=c; }
         static int kills, forced_stuck, forced_error;
-        static pid_t test_waitpid(pid_t p, int *s, int flags) { if (forced_error) { errno=EINVAL; return -1; } return forced_stuck ? 0 : waitpid(p,s,flags); }
+        static pid_t test_waitpid(pid_t p, int *s, int flags) { if (forced_error) { errno=forced_error == 1 ? EINVAL : EINTR; return -1; } return forced_stuck ? 0 : waitpid(p,s,flags); }
         static int test_kill(pid_t p, int sig) { kills++; return forced_stuck ? -1 : kill(p,sig); }
         #define waitpid test_waitpid
         #define kill test_kill
@@ -40,7 +40,7 @@ class ProbeReaperTest(unittest.TestCase):
          if (pending) { fprintf(stderr,"reaper did not finish\n"); exit(1); }
          if (waitpid(p,NULL,WNOHANG)!=-1 || errno!=ECHILD) { fprintf(stderr,"child not reaped\n"); exit(1); }
         }
-        int main(void) { run(0); if (kills) return 2; run(1); if (kills!=1) return 3; pid_t p=fork(); if (!p) _exit(0); waitpid(p,NULL,0); ATProbeReaper *r=calloc(1,sizeof(*r)); r->pid=p; ATReapChildAsync(r); tick(); if (pending || kills!=1) return 4; forced_stuck=1; r=calloc(1,sizeof(*r)); r->pid=123; ATReapChildAsync(r); for (int i=0; pending && i<500; i++) tick(); if (pending || kills!=2) return 5; forced_stuck=0; forced_error=1; r=calloc(1,sizeof(*r)); r->pid=123; ATReapChildAsync(r); tick(); if (pending || kills!=2) return 6; puts("probe reaper exit, timeout, ECHILD and bounded failure passed"); return 0; }
+        int main(void) { run(0); if (kills) return 2; run(1); if (kills!=1) return 3; pid_t p=fork(); if (!p) _exit(0); waitpid(p,NULL,0); ATProbeReaper *r=calloc(1,sizeof(*r)); r->pid=p; ATReapChildAsync(r); tick(); if (pending || kills!=1) return 4; forced_stuck=1; r=calloc(1,sizeof(*r)); r->pid=123; ATReapChildAsync(r); for (int i=0; pending && i<500; i++) tick(); if (pending || kills!=2) return 5; forced_stuck=0; forced_error=1; r=calloc(1,sizeof(*r)); r->pid=123; ATReapChildAsync(r); tick(); if (pending || kills!=2) return 6; forced_error=2; r=calloc(1,sizeof(*r)); r->pid=124; ATReapChildAsync(r); for (int i=0; pending && i<500; i++) tick(); if (pending || kills!=2) return 7; puts("probe reaper exit, timeout, ECHILD and bounded failure passed"); return 0; }
         '''
         with tempfile.TemporaryDirectory() as d:
             p = pathlib.Path(d) / 'test.c'; p.write_text(harness)
