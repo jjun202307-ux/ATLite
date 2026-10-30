@@ -1570,7 +1570,14 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
                              CFStringRef name,
                              const void *object,
                              CFDictionaryRef userInfo) {
-    @autoreleasepool { ATHandleCommand(); }
+    @autoreleasepool {
+        // Serialize command reads through admission, without holding the gate
+        // during script execution. The stop file remains independently visible.
+        static NSObject *ATCommandCallbackGate;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ ATCommandCallbackGate = [NSObject new]; });
+        @synchronized (ATCommandCallbackGate) { ATHandleCommand(); }
+    }
 }
 
 #pragma mark - Constructor

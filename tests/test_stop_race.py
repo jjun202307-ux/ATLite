@@ -3,6 +3,40 @@ import os, pathlib, platform, shutil, subprocess, tempfile, unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class StopRace(unittest.TestCase):
+    def test_darwin_callback_serializes_handler_native(self):
+        source = (ROOT / 'tweak/Tweak.xm').read_text(encoding='utf-8')
+        self.assertTrue('ATCommandCallbackGate' in source, 'callback serialization gate required')
+        if platform.system() != 'Darwin':
+            self.skipTest('Foundation native fixture requires macOS')
+        start = source.index('static void ATDarwinCallback(')
+        end = source.index('#pragma mark - Constructor', start)
+        callback = source[start:end]
+        fixture = r'''#import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
+#import <dispatch/dispatch.h>
+#include <unistd.h>
+static int active = 0, overlap = 0, calls = 0;
+static void ATHandleCommand(void) {
+    if (__sync_add_and_fetch(&active, 1) != 1) __sync_fetch_and_add(&overlap, 1);
+    usleep(1000);
+    __sync_fetch_and_add(&calls, 1);
+    __sync_sub_and_fetch(&active, 1);
+}
+''' + callback + r'''
+int main(void) { @autoreleasepool {
+    dispatch_apply(200, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(size_t i) {
+        (void)i; ATDarwinCallback(NULL, NULL, NULL, NULL, NULL);
+    });
+    NSCAssert(calls == 200 && overlap == 0, @"command handlers must not overlap");
+    return 0;
+} }
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            src = pathlib.Path(tmp) / 'callback.m'; src.write_text(fixture, encoding='utf-8')
+            exe = pathlib.Path(tmp) / 'callback'
+            subprocess.run(['clang', '-fobjc-arc', '-fblocks', '-framework', 'Foundation', '-framework', 'CoreFoundation', str(src), '-o', str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
+
     def test_production_stop_file_native(self):
         if os.name != 'posix':
             self.skipTest('POSIX file APIs required')
