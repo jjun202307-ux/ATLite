@@ -160,7 +160,7 @@ def main(root):
     check("R19-E19 CI set -x 诊断", "set -ux" in wf or "set -x" in wf)
     check("R19-E19 CI 存在性断言", "test -f" in wf)
     check("R20-E20 CI 断言现代 libroot", 'test -f "$THEOS/lib/iphone/roothide/libroot.a"' in wf)
-    check("ABI 使用 macOS Xcode 工具链", "runs-on: macos-14" in wf and "xcrun --sdk iphoneos clang --version" in wf
+    check("ABI 使用 macOS Xcode 工具链", "runs-on: macos-15" in wf and "xcrun --sdk iphoneos clang --version" in wf
           and "iOSToolchain-x86_64.tar.xz" not in wf)
     check("ABI 链接不放过未定义符号", "undefined,dynamic_lookup" not in read(root, "tweak/Makefile"))
 
