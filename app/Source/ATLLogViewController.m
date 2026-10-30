@@ -2,6 +2,8 @@
 #import "ATLPaths.h"
 #import "ATLCommand.h"
 #import "ATLProbe.h"
+#import "ATLStatusText.h"
+#import "ATLFileIO.h"
 
 // E24：日志查看页。职责：
 //  1) 显示 <jbroot>/var/mobile/Library/ATLite/logs/tweak.log（多路径探测，容忍 jbroot 推导差异）
@@ -88,38 +90,37 @@
 #pragma mark - Actions
 
 - (void)stopScript {
-    ATLSendStop(); // E26 双通道
+    BOOL sent = ATLSendStop();
     [self reload];
+    if (!sent) self.pathLabel.text = @"停止命令写入失败，请检查目录权限";
 }
 
 // App output is captured directly. P2 is asynchronous and reported in tweak.log;
 // a begin line never establishes completion of the SpringBoard probe.
 - (void)runProbe {
+    if (!ATLBaseDir().length) {
+        self.text.text = @"无法确定当前越狱根目录，诊断探针已禁用";
+        return;
+    }
     self.autoRefresh = NO;
     self.toolbarItems.lastObject.title = @"自动刷新: 关";
     [self stopTimer];
     self.text.text = @"正在运行 App 诊断探针…";
-    ATLSendCommand(@"probe", nil);
+    BOOL probeSent = ATLSendCommand(@"probe", nil);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *out = ATLRunProbe(@"app");
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.text.text = [out stringByAppendingString:@"\n\nP2: 已发送 SpringBoard 探针请求，未确认完成。请点刷新查看 tweak.log 中本次 run_id 的 spawn、PROBE_END 和退出状态；begin 只表示开始。App 结果保存于 probe-app.log。"];
+            self.text.text = [(probeSent ? out : [@"SpringBoard 探针命令写入失败；以下仅为 App 探针。\n" stringByAppendingString:out]) stringByAppendingString:probeSent ? @"\n\nP2: 已发送 SpringBoard 探针请求，未确认完成。请点刷新查看 tweak.log 中本次 run_id 的 spawn、PROBE_END 和退出状态；begin 只表示开始。App 结果保存于 probe-app.log。" : @"\n\nP2: 未投递，命令文件写入失败。App 结果保存于 probe-app.log。"];
             self.text.textColor = [UIColor blackColor];
-            self.pathLabel.text = @"App 诊断结果（自动刷新: 关；P2 请查看 tweak.log）";
+            self.pathLabel.text = probeSent ? @"App 诊断结果（自动刷新: 关；P2 请查看 tweak.log）" : @"App 诊断结果（P2 投递失败）";
         });
     });
 }
 
 // 运行状态（tweak 写 status.json）：让"到底还在不在跑"不再是猜的
 - (NSString *)statusText {
-    NSData *d = [NSData dataWithContentsOfFile:ATLStatusPath()];
-    if (!d) return @"状态: 未知（tweak 未运行过脚本）";
-    NSDictionary *s = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-    if (![s isKindOfClass:[NSDictionary class]]) return @"状态: 未知";
-    BOOL running = [s[@"running"] boolValue];
-    NSString *name = s[@"script"] ?: @"";
-    return running ? [NSString stringWithFormat:@"状态: 运行中 · %@", name]
-                   : @"状态: 空闲";
+    NSString *path = ATLStatusPath();
+    return ATLStatusTextFromData(path.length ? [NSData dataWithContentsOfFile:path] : nil);
 }
 
 - (void)toggleAuto {
@@ -145,6 +146,7 @@
 - (void)clearLog {
     NSString *p = ATLExistingLogPath();
     if (!p) p = [ATLLogsDir() stringByAppendingPathComponent:@"tweak.log"];
+    if (!p.length) { self.pathLabel.text = @"无法确定当前越狱根目录，无法清空日志"; return; }
     [@"" writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [self reload];
 }
@@ -172,8 +174,7 @@
         return;
     }
 
-    NSData *d = [NSData dataWithContentsOfFile:p];
-    NSString *s = d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : nil;
+    NSString *s = ATLReadLogTail(p, 256 * 1024);
     // 评审 C3：存在但读不到（权限/损坏）要与"文件不存在"区分开，否则会被误读为 tweak 没写日志
     if (!s) {
         self.text.text = [NSString stringWithFormat:
@@ -181,10 +182,6 @@
         self.text.textColor = [UIColor systemRedColor];
         self.pathLabel.text = p;
         return;
-    }
-    // 只保留尾部（日志可能很长）
-    if (s.length > 100000) {
-        s = [@"...（省略前部）\n" stringByAppendingString:[s substringFromIndex:s.length - 100000]];
     }
     self.text.text = s;
     self.text.textColor = [UIColor blackColor];

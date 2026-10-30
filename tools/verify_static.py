@@ -80,11 +80,19 @@ def main(root):
     check("R29-E29 自建surface必需属性键",
           '"IOSurfaceIsGlobal"' in tweak and '"IOSurfaceAllocSize"' in tweak
           and '"IOSurfacePixelFormat"' in tweak and '"IOSurfaceBytesPerRow"' in tweak)
-    check("R29-E29 渲染前后Lock/Unlock",
-          "_AT_IOSurfaceLock(s, 0, NULL)" in tweak and "_AT_IOSurfaceUnlock(s, 0, 0)" in tweak)
+    check("R29-E29 渲染前写锁/解锁及后置只读锁",
+          "_AT_IOSurfaceLock(s, 0, NULL)" in tweak and "_AT_IOSurfaceUnlock(s, 0, NULL)" in tweak
+          and "_AT_IOSurfaceLock(s, 1" in tweak)
     check("R29-E29 屏幕像素尺寸惰性缓存(主线程取值)",
           "ATScreenPixelSize" in tweak and "dispatch_get_main_queue" in tweak)
-    check("R29-E29 RenderDisplay 返回值检查", "kr != 0" in tweak)
+    check("R29-E29 RenderDisplay void ABI", "static void (*_AT_CARenderServerRenderDisplay)" in tweak
+          and "int kr = _AT_CARenderServerRenderDisplay" not in tweak)
+    capture = tweak_code[tweak_code.find("static IOSurfaceRef ATRenderIntoNewSurface("):tweak_code.find("static IOSurfaceRef ATCaptureSurfaceWithTimeout(")]
+    check("R29-E29 渲染后核验sentinel变化而非空分配",
+          0 <= capture.find("memset(initial, 0xa5") < capture.find("_AT_CARenderServerRenderDisplay(0")
+          < capture.find("BOOL written = ATCaptureWasWritten(")
+          and "if (!written || unlockRC != 0)" in capture)
+
     check("R3-E3 无CreateServer残留", "CreateServer" not in tweak)
 
     # ---- R30/E30: 屏幕尺寸获取不得绕过看门狗原则（v0.3.7 复查 H1/H2）----
@@ -163,15 +171,13 @@ def main(root):
         pi = read(root, "layout/DEBIAN/postinst")
         check("R22-E22 postinst 用 vroot 路径",
               "/Applications/ATLite.app" in pi and "/rootfs/" not in pi)
-    # jbroot 探测路径必须是实证位置（Dopamine-roothide DOBootstrapper.m）
-    # 注意：App 侧路径逻辑住在 ATLPaths.m（v0.3.3 抽出共享模块），
-    # 但断言应判定"App 侧整体"，不钉死单个文件名——否则文件一移动就假红
-    app_paths = strip_comments(read(root, "app/Source/ATLPaths.m")) + \
-                strip_comments(read(root, "app/Source/ATLRootViewController.m"))
-    check("R22-E22 tweak 探测实证 jbroot 位置",
-          "/var/containers/Bundle/Application" in tweak_code)
-    check("R22-E22 app 探测实证 jbroot 位置",
-          "/var/containers/Bundle/Application" in app_paths)
+    # Active-root resolution must not guess the first leftover .jbroot directory.
+    app_paths = strip_comments(read(root, "app/Source/ATLPaths.m"))
+    for side, code in [("tweak", tweak_code), ("app", app_paths)]:
+        check("R22-E22 %s 当前libroot且不枚举猜根" % side,
+              'libroot_get_jbroot_prefix' in code
+              and 'hasPrefix:@".jbroot-"' not in code
+              and 'isDirectory:' in code)
 
     # ---- R8/E8: filter plist 命名 == TWEAK_NAME ----
     check("R8-E8 ATLiteTweak.plist 在位",
@@ -259,8 +265,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.11三处同步",
-          "Version: 0.3.11" in ctrl and "<string>0.3.11</string>" in plist_raw and "v0.3.11" in tweak)
+    check("V 版本0.3.12三处同步",
+          "Version: 0.3.12" in ctrl and "<string>0.3.12</string>" in plist_raw and "v0.3.12" in tweak)
 
     # ---- R32: 阶段 0 探针包 v0.3.10（A/B 双模式可行性验证 P1-P5）----
     # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义

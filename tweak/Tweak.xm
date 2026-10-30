@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.11 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.12 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -20,6 +20,7 @@
 #import <Vision/Vision.h>
 #import <dlfcn.h>
 #import <mach/mach_time.h>
+#import <mach/boolean.h>
 #import <sys/stat.h>
 #import <time.h>
 #import <spawn.h>
@@ -31,6 +32,7 @@
 #import <signal.h>
 #import <string.h>
 #import "ATCore.h"
+#import "ATCaptureValidation.h"
 #import "../shared/ATLEmailJob.h"
 
 #include <stdarg.h>
@@ -71,23 +73,37 @@ static NSString *ATJBRoot(void) {
             if (r.location != NSNotFound && r.location > 0) {
                 root = [selfPath substringToIndex:r.location];
                 gJBRootSource = @"dladdr";
-                return;
             }
         }
+        NSString *ownRoot = root;
+        root = nil;
         NSFileManager *fm = [NSFileManager defaultManager];
+        typedef const char *(*ATGetJBRootPrefix)(void);
+        ATGetJBRootPrefix getPrefix = (ATGetJBRootPrefix)dlsym(RTLD_DEFAULT, "libroot_get_jbroot_prefix");
+        void *libroot = NULL;
+        if (!getPrefix) {
+            libroot = dlopen("@rpath/libroot.dylib", RTLD_NOW);
+            if (libroot) getPrefix = (ATGetJBRootPrefix)dlsym(libroot, "libroot_get_jbroot_prefix");
+        }
+        if (getPrefix) {
+            const char *prefix = getPrefix();
+            NSString *candidate = prefix ? [NSString stringWithUTF8String:prefix] : nil;
+            BOOL directory = NO;
+            if (candidate.isAbsolutePath && [fm fileExistsAtPath:candidate isDirectory:&directory] && directory) {
+                root = candidate; gJBRootSource = @"libroot";
+            }
+        }
+        if (libroot) dlclose(libroot);
+        if (root) return;
+        BOOL ownDirectory = NO;
+        if (ownRoot && [fm fileExistsAtPath:ownRoot isDirectory:&ownDirectory] && ownDirectory) {
+            root = ownRoot; gJBRootSource = @"dladdr"; return;
+        }
         // Dopamine-roothide 实证（DOBootstrapper.m）：/var/jb 是指向 jbroot 的 symlink；
         // jbroot 真实位置 /var/containers/Bundle/Application/.jbroot-<16hex>
-        if ([fm fileExistsAtPath:@"/var/jb"]) { root = @"/var/jb"; gJBRootSource = @"probe:/var/jb"; return; }
-        NSArray *cands = [fm contentsOfDirectoryAtPath:@"/var/containers/Bundle/Application" error:nil];
-        for (NSString *n in cands) {
-            if ([n hasPrefix:@".jbroot-"]) {
-                root = [@"/var/containers/Bundle/Application" stringByAppendingPathComponent:n];
-                gJBRootSource = @"probe:.jbroot";
-                return;
-            }
-        }
-        root = @"/var/jb"; // fallback
-        gJBRootSource = @"fallback";
+        BOOL jbDirectory = NO;
+        if ([fm fileExistsAtPath:@"/var/jb" isDirectory:&jbDirectory] && jbDirectory) { root = @"/var/jb"; gJBRootSource = @"probe:/var/jb"; return; }
+        gJBRootSource = @"unavailable";
     });
     return root;
 }
@@ -200,16 +216,17 @@ static IOHIDEventSystemClientRef (*_AT_IOHIDEventSystemClientCreate)(CFAllocator
 static void (*_AT_IOHIDEventSystemClientDispatchEvent)(IOHIDEventSystemClientRef, IOHIDEventRef);
 // DigitizerEvent(15 参): allocator, ts, transducerType, index, identity, eventMask, options,
 //                        x, y, z, tipPressure, barrelPressure, range, touch, options
-static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, double, double, double, double, double, Boolean, Boolean, uint32_t);
+// WebKit PAL IOKitSPIIOS.h: the seventh argument is buttonMask, not options.
+static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, double, double, double, double, double, boolean_t, boolean_t, uint32_t);
 // FingerEvent（13 参，E5 的教训——多一个 uint32 都会错位寄存器）:
 //   allocator, ts, index, identity, eventMask, x, y, z, tipPressure, twist, range, touch, options
-static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, double, double, double, double, double, Boolean, Boolean, uint32_t);
+static IOHIDEventRef (*_AT_IOHIDEventCreateDigitizerFingerEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, double, double, double, double, double, boolean_t, boolean_t, uint32_t);
 static void (*_AT_IOHIDEventAppendEvent)(IOHIDEventRef, IOHIDEventRef, uint32_t);
 // ⚠ E1：真实符号名以 ...Value 结尾；"IOHIDEventSetInteger" 不存在
-static void (*_AT_IOHIDEventSetIntegerValue)(IOHIDEventRef, uint32_t, int32_t);
+static void (*_AT_IOHIDEventSetIntegerValue)(IOHIDEventRef, uint32_t, CFIndex);
 static void (*_AT_IOHIDEventSetFloatValue)(IOHIDEventRef, uint32_t, double);
-// 键盘：usagePage/usage 真实类型 uint16_t（F48）
-static IOHIDEventRef (*_AT_IOHIDEventCreateKeyboardEvent)(CFAllocatorRef, uint64_t, uint16_t, uint16_t, Boolean, uint32_t);
+// WebKit PAL IOKitSPIIOS.h: uint32_t usages and Darwin boolean_t.
+static IOHIDEventRef (*_AT_IOHIDEventCreateKeyboardEvent)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, boolean_t, uint32_t);
 
 static IOHIDEventSystemClientRef gHIDClient = nil;
 static BOOL gHIDReady = NO;
@@ -378,7 +395,9 @@ typedef struct CF_BRIDGED_TYPE(id) __IOSurface *IOSurfaceRef;
 // 且是零文档内部接口，系统级 hang 最大嫌疑）。SO 实证用法：
 //   surface = IOSurfaceCreate(props);            // 调用方自建、自控生命周期
 //   CARenderServerRenderDisplay(0, CFSTR("LCD"), surface, 0, 0);
-static int (*_AT_CARenderServerRenderDisplay)(uint32_t, CFStringRef, IOSurfaceRef, uint32_t, uint32_t);
+// Signature independently checked against ioscpy Capture.mm and RecordMyScreen.
+// It returns void: reading the return register as kern_return_t produced false kr=1 failures.
+static void (*_AT_CARenderServerRenderDisplay)(uint32_t, CFStringRef, IOSurfaceRef, uint32_t, uint32_t);
 static IOSurfaceRef (*_AT_IOSurfaceCreate)(CFDictionaryRef);
 static size_t (*_AT_IOSurfaceGetWidth)(IOSurfaceRef);
 static size_t (*_AT_IOSurfaceGetHeight)(IOSurfaceRef);
@@ -418,7 +437,7 @@ static void ATLoadCaptureSymbols(void) {
         return;
     }
     gCaptureReady = YES;
-    ATLog(@"capture ready: YES (RenderDisplay, lock: %@)", _AT_IOSurfaceLock ? @"YES" : @"NO");
+    ATLog(@"capture symbols ready (frame capture not yet verified)");
 }
 
 // E30（v0.3.7 复查 H1/H2）：自建 IOSurface 需要物理像素尺寸，但取法有两条铁律——
@@ -481,9 +500,11 @@ static BOOL gCaptureBroken = NO;
 static IOSurfaceRef ATRenderIntoNewSurface(void) {
     CGSize px = ATScreenPixelSize();
     int w = (int)px.width, h = (int)px.height;
-    if (w <= 0 || h <= 0) { ATLog(@"screen pixel size unavailable"); return NULL; }
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || (size_t)w * h > 16777216) {
+        ATLog(@"screen pixel size invalid or too large: %dx%d", w, h); return NULL;
+    }
     int bpe = 4, pitch = w * 4, alloc = pitch * h;
-    int argb = 0x41524742; // 'ARGB'
+    int argb = 0x42475241; // 'BGRA': byte order B,G,R,A, as used by current capture implementations.
     CFTypeRef keys[7] = {
         CFSTR("IOSurfaceIsGlobal"), CFSTR("IOSurfaceBytesPerElement"),
         CFSTR("IOSurfaceBytesPerRow"), CFSTR("IOSurfaceWidth"),
@@ -496,6 +517,11 @@ static IOSurfaceRef ATRenderIntoNewSurface(void) {
     CFNumberRef nH     = CFNumberCreate(NULL, kCFNumberSInt32Type, &h);
     CFNumberRef nFmt   = CFNumberCreate(NULL, kCFNumberSInt32Type, &argb);
     CFNumberRef nAlloc = CFNumberCreate(NULL, kCFNumberSInt32Type, &alloc);
+    if (!nBpe || !nPitch || !nW || !nH || !nFmt || !nAlloc) {
+        CFNumberRef values[] = {nBpe, nPitch, nW, nH, nFmt, nAlloc};
+        for (CFNumberRef value : values) if (value) CFRelease(value);
+        ATLog(@"capture: surface property allocation failed"); return NULL;
+    }
     CFTypeRef vals[7] = { kCFBooleanTrue, nBpe, nPitch, nW, nH, nFmt, nAlloc };
     CFDictionaryRef props = CFDictionaryCreate(NULL, keys, vals, 7,
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -509,13 +535,27 @@ static IOSurfaceRef ATRenderIntoNewSurface(void) {
     if (!_AT_IOSurfaceLock || !_AT_IOSurfaceUnlock || _AT_IOSurfaceLock(s, 0, NULL) != 0) {
         CFRelease(s); ATLog(@"capture: surface write lock failed"); return NULL;
     }
-    int kr = _AT_CARenderServerRenderDisplay(0, CFSTR("LCD"), s, 0, 0);
-    if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 0, 0);
-    if (kr != 0) {
-        ATLog(@"RenderDisplay failed kr=%d", kr);
-        CFRelease(s);
-        return NULL;
+    uint8_t *initial = (uint8_t *)_AT_IOSurfaceGetBaseAddress(s);
+    size_t surfacePitch = _AT_IOSurfaceGetBytesPerRow(s);
+    if (!initial || surfacePitch < (size_t)w * 4 || surfacePitch > (size_t)w * 4 + 65536) {
+        _AT_IOSurfaceUnlock(s, 0, NULL); CFRelease(s); return NULL;
     }
+    memset(initial, 0xa5, surfacePitch * (size_t)h);
+    int32_t unlockRC = _AT_IOSurfaceUnlock(s, 0, NULL);
+    if (unlockRC != 0) { ATLog(@"capture: surface write unlock=%d", unlockRC); CFRelease(s); return NULL; }
+    _AT_CARenderServerRenderDisplay(0, CFSTR("LCD"), s, 0, 0);
+    uint32_t seed = 0;
+    int32_t lockRC = _AT_IOSurfaceLock(s, 1 /* ReadOnly, synchronize renderer writes */, &seed);
+    if (lockRC != 0) { ATLog(@"capture: surface read lock=%d", lockRC); CFRelease(s); return NULL; }
+    BOOL written = ATCaptureWasWritten((const uint8_t *)_AT_IOSurfaceGetBaseAddress(s),
+                                      (size_t)w, (size_t)h, surfacePitch);
+    unlockRC = _AT_IOSurfaceUnlock(s, 1, &seed);
+    if (!written || unlockRC != 0) {
+        ATLog(@"capture: renderer left destination untouched or unlock failed (%d); no frame", unlockRC);
+        CFRelease(s); return NULL;
+    }
+    static BOOL loggedFrame = NO; // confined to gCaptureQueue
+    if (!loggedFrame) { ATLog(@"capture: first written frame %dx%d BGRA (visual correctness requires device check)", w, h); loggedFrame = YES; }
     return s;
 }
 
@@ -559,13 +599,15 @@ static BOOL ATCaptureScreen(ATBitmap *out) {
     if (!s) return NO;
     uint32_t seed = 0;
     if (!_AT_IOSurfaceLock || !_AT_IOSurfaceUnlock ||
-        _AT_IOSurfaceLock(s, 3 /*ReadOnly | AvoidSync*/, &seed) != 0) { CFRelease(s); return NO; }
+        _AT_IOSurfaceLock(s, 1 /* ReadOnly */, &seed) != 0) { CFRelease(s); return NO; }
     int w = (int)_AT_IOSurfaceGetWidth(s);
     int h = (int)_AT_IOSurfaceGetHeight(s);
     size_t pitch = _AT_IOSurfaceGetBytesPerRow(s);
     uint32_t fmt = _AT_IOSurfaceGetPixelFormat(s); // 'BGRA' 或 'ARGB'
     uint8_t *base = (uint8_t *)_AT_IOSurfaceGetBaseAddress(s);
-    if (w <= 0 || h <= 0 || !base || pitch < (size_t)w * 4) {
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192 ||
+        (size_t)w * h > 16777216 || !base || pitch < (size_t)w * 4 ||
+        (fmt != 0x41524742u && fmt != 0x42475241u)) {
         if (_AT_IOSurfaceUnlock) _AT_IOSurfaceUnlock(s, 1, &seed);
         CFRelease(s); return NO;
     }
@@ -715,21 +757,26 @@ static double ATCaptureScale(const ATBitmap *b) {
 }
 
 static int l_touchDown(lua_State *L) {
+    ATCheckScript(L);
     ATSimulateTouch(0, (int)luaL_checkinteger(L,1), (float)luaL_checknumber(L,2), (float)luaL_checknumber(L,3));
     return 0;
 }
 static int l_touchMove(lua_State *L) {
+    ATCheckScript(L);
     ATSimulateTouch(1, (int)luaL_checkinteger(L,1), (float)luaL_checknumber(L,2), (float)luaL_checknumber(L,3));
     return 0;
 }
 static int l_touchUp(lua_State *L) {
+    ATCheckScript(L);
     ATSimulateTouch(2, (int)luaL_checkinteger(L,1), (float)luaL_checknumber(L,2), (float)luaL_checknumber(L,3));
     return 0;
 }
 static int l_keyDown(lua_State *L) {
+    ATCheckScript(L);
     ATSimulateKey(YES, (int)luaL_checkinteger(L,1)); return 0;
 }
 static int l_keyUp(lua_State *L) {
+    ATCheckScript(L);
     ATSimulateKey(NO, (int)luaL_checkinteger(L,1)); return 0;
 }
 // AutoTouch 语义: usleep(微秒)
@@ -773,8 +820,12 @@ static int l_log(lua_State *L) {
     int n = lua_gettop(L);
     NSMutableString *s = [NSMutableString string];
     for (int i = 1; i <= n; i++) {
-        const char *v = lua_tostring(L, i);
-        [s appendFormat:@"%s%s", v ? v : lua_typename(L, lua_type(L, i)), i < n ? " " : ""];
+        size_t length = 0;
+        const char *v = lua_tolstring(L, i, &length);
+        NSString *piece = v ? [[NSString alloc] initWithBytes:v length:length encoding:NSUTF8StringEncoding]
+                            : [NSString stringWithUTF8String:lua_typename(L, lua_type(L, i))];
+        [s appendString:piece ?: @"[invalid UTF-8]"];
+        if (i < n) [s appendString:@" "];
     }
     ATLog(@"[lua] %@", s);
     return 0;
@@ -1042,7 +1093,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.11 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.12 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1213,14 +1264,36 @@ static void *ATLuaAllocator(void *ud, void *ptr, size_t oldSize, size_t newSize)
     return ATBudgetRealloc((ATMemoryBudget *)ud, ptr, oldSize, newSize);
 }
 
+// Preserve ordinary protected-call results, but never let a script swallow the
+// persistent stop/deadline signal and continue its outer loop indefinitely.
+static int ATGuardedProtectedCall(lua_State *L) {
+    int arguments = lua_gettop(L);
+    ATCheckScript(L);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_insert(L, 1);
+    lua_call(L, arguments, LUA_MULTRET);
+    ATCheckScript(L);
+    return lua_gettop(L);
+}
+static void ATGuardProtectedCall(lua_State *L, const char *name) {
+    lua_getglobal(L, name);
+    lua_pushcclosure(L, ATGuardedProtectedCall, 1);
+    lua_setglobal(L, name);
+}
+
 static int ATInitializeLua(lua_State *L) {
     luaL_requiref(L, "_G", luaopen_base, 1); lua_pop(L, 1);
     luaL_requiref(L, LUA_TABLIBNAME, luaopen_table, 1); lua_pop(L, 1);
     luaL_requiref(L, LUA_STRLIBNAME, luaopen_string, 1); lua_pop(L, 1);
     luaL_requiref(L, LUA_MATHLIBNAME, luaopen_math, 1); lua_pop(L, 1);
     luaL_requiref(L, LUA_UTF8LIBNAME, luaopen_utf8, 1); lua_pop(L, 1);
+    ATGuardProtectedCall(L, "pcall");
+    ATGuardProtectedCall(L, "xpcall");
     // No debug/os/io/package/coroutine. This is defense in depth, not a sandbox.
-    const char *removed[] = { "dofile", "loadfile", "load", "collectgarbage", NULL };
+    // Lua 5.3 disables instruction hooks during __gc. A script-installed
+    // finalizer could therefore loop forever even during lua_close().
+    const char *removed[] = { "dofile", "loadfile", "load", "collectgarbage",
+                             "setmetatable", "getmetatable", NULL };
     for (int i=0; removed[i]; i++) { lua_pushnil(L); lua_setglobal(L, removed[i]); }
     lua_pushinteger(L, arc4random_uniform(0x7fffffff)); lua_setglobal(L, "_atlSeed");
     luaL_newlib(L, ATLuaFuncs); lua_setglobal(L, "at");
@@ -1380,6 +1453,7 @@ static void ATHandleCommand(void) {
     // 阶段 0 探针 P2：SpringBoard 内 spawn（不跑脚本、不影响任何现有状态）
     if ([action isEqualToString:@"probe"]) {
         if (!ATIsSpringBoard()) return;
+        if (!ATJBRoot()) { NSLog(@"[ATLite] current jailbreak root unavailable; tweak disabled"); return; }
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             @autoreleasepool { ATProbeSpawnFromSpringBoard(); }
         });
@@ -1419,6 +1493,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
 %ctor {
     @autoreleasepool {
         if (!ATIsSpringBoard()) return;
+        if (!ATJBRoot()) { NSLog(@"[ATLite] current jailbreak root unavailable; tweak disabled"); return; }
         NSFileManager *fm = [NSFileManager defaultManager];
         for (NSString *dir in @[ATBaseDir(), ATScriptsDir(), ATLibsDir(), ATImagesDir(), ATLogsDir()]) {
             [fm createDirectoryAtPath:dir withIntermediateDirectories:YES
@@ -1432,7 +1507,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.11 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.12 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

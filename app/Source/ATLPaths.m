@@ -1,33 +1,47 @@
 #import "ATLPaths.h"
 #import <UIKit/UIKit.h>
+#import <dlfcn.h>
 
 NSString * const ATLDarwinNotifyName = @"me.atlite.command";
 
-// jbroot 推导（RESEARCH D1 的 App 侧落实）：
-// 自身安装于 <jbroot>/Applications/ATLite.app —— 以 mainBundle.bundlePath 去后缀推导
-// （与安装路径天然一致，不依赖探测），探测仅作回退。结果缓存，与 tweak 侧同模式。
+// libroot's documented API returns the active bootstrap, avoiding stale .jbroot
+// directory guesses. Source: opa334/libroot src/dyn.c and README.md.
 NSString *ATLJBRoot(void) {
     static NSString *root = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+        NSFileManager *fm = NSFileManager.defaultManager;
         NSString *bp = [NSBundle mainBundle].bundlePath;
-        NSRange r = [bp rangeOfString:@"/Applications/ATLite.app" options:NSBackwardsSearch];
-        if (r.location != NSNotFound && r.location > 0) {
-            root = [bp substringToIndex:r.location];
+        NSString *suffix = @"/Applications/ATLite.app";
+        NSString *ownRoot = [bp hasSuffix:suffix] && bp.length > suffix.length
+            ? [bp substringToIndex:bp.length - suffix.length] : nil;
+        const char *(*prefix)(void) = dlsym(RTLD_DEFAULT, "libroot_get_jbroot_prefix");
+        void *library = NULL;
+        if (!prefix) {
+            library = dlopen("@rpath/libroot.dylib", RTLD_NOW | RTLD_LOCAL);
+            if (!library && ownRoot)
+                library = dlopen([[ownRoot stringByAppendingPathComponent:@"usr/lib/libroot.dylib"] fileSystemRepresentation], RTLD_NOW | RTLD_LOCAL);
+            if (library) prefix = dlsym(library, "libroot_get_jbroot_prefix");
+        }
+        const char *value = prefix ? prefix() : NULL;
+        NSString *active = value ? [NSString stringWithUTF8String:value] : nil;
+        BOOL directory = NO;
+        if ([active hasPrefix:@"/"] && [fm fileExistsAtPath:active isDirectory:&directory] && directory)
+            root = active;
+        if (library) dlclose(library); // active has copied the provider's static bytes.
+        if (root) return;
+        directory = NO;
+        if (ownRoot && [fm fileExistsAtPath:ownRoot isDirectory:&directory] && directory) {
+            root = ownRoot;
             return;
         }
-        // 回退：探测（未知安装方式下的兜底）
-        // Dopamine-roothide 实证（DOBootstrapper.m）：/var/jb 是指向 jbroot 的 symlink；
-        // jbroot 真实位置 /var/containers/Bundle/Application/.jbroot-<16hex>
-        NSFileManager *fm = [NSFileManager defaultManager];
-        if ([fm fileExistsAtPath:@"/var/jb"]) { root = @"/var/jb"; return; }
-        for (NSString *n in [fm contentsOfDirectoryAtPath:@"/var/containers/Bundle/Application" error:nil]) {
-            if ([n hasPrefix:@".jbroot-"]) {
-                root = [@"/var/containers/Bundle/Application" stringByAppendingPathComponent:n];
-                return;
-            }
+        directory = NO;
+        if ([fm fileExistsAtPath:@"/var/jb" isDirectory:&directory] && directory) {
+            root = @"/var/jb";
+            return;
         }
-        root = @"/var/jb"; // fallback
+        // No active bootstrap is known: callers must disable writes and commands.
+        root = nil;
     });
     return root;
 }
@@ -42,14 +56,8 @@ NSString *ATLStatusPath(void)  { return [ATLBaseDir() stringByAppendingPathCompo
 
 NSArray<NSString *> *ATLLogCandidatePaths(void) {
     NSMutableArray<NSString *> *roots = [NSMutableArray array];
-    [roots addObject:ATLJBRoot()];
-    [roots addObject:@"/var/jb"];
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *n in [fm contentsOfDirectoryAtPath:@"/var/containers/Bundle/Application" error:nil]) {
-        if ([n hasPrefix:@".jbroot-"]) {
-            [roots addObject:[@"/var/containers/Bundle/Application" stringByAppendingPathComponent:n]];
-        }
-    }
+    if (ATLJBRoot()) [roots addObject:ATLJBRoot()];
+    // Do not search unrelated bootstrap roots for an old log.
     NSMutableArray<NSString *> *out = [NSMutableArray array];
     NSMutableSet<NSString *> *seen = [NSMutableSet set];
     for (NSString *r in roots) {

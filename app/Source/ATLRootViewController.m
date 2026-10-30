@@ -56,6 +56,7 @@
 
 // 首次启动：把随包的 test.at 复制进 Scripts 目录（已存在则不覆盖，尊重用户修改）
 - (void)seedBundledScripts {
+    if (!ATLScriptsDir().length) return;
     // M3：目录必须先建（fresh 环境下 tweak %ctor 可能还没跑过，copy 静默失败即 R9 落空）
     [[NSFileManager defaultManager] createDirectoryAtPath:ATLScriptsDir()
                               withIntermediateDirectories:YES attributes:nil error:nil];
@@ -93,6 +94,10 @@
 
 - (void)startServer {
     NSString *dir = ATLBaseDir();
+    if (!dir.length) {
+        self.statusLabel.text = @"无法确定当前越狱根目录，文件服务与命令已禁用";
+        return;
+    }
     for (NSString *sub in @[@"Scripts", @"Images"]) {
         [[NSFileManager defaultManager] createDirectoryAtPath:[dir stringByAppendingPathComponent:sub]
                                   withIntermediateDirectories:YES attributes:nil error:nil];
@@ -108,9 +113,9 @@
 #pragma mark - Run
 
 - (void)runScript:(NSString *)name {
-    ATLSendCommand(@"run", name);
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已发送运行命令"
-                                                                  message:name
+    BOOL sent = ATLSendCommand(@"run", name);
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:sent ? @"已发送运行命令" : @"运行命令写入失败"
+                                                                  message:sent ? name : @"请检查共享目录权限；命令尚未投递。"
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -119,9 +124,9 @@
 #pragma mark - Stop (E26)
 
 - (void)stopScript {
-    ATLSendStop(); // E26：双通道（stop.flag 文件兜底 + 通知）
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"已发送强停"
-        message:@"脚本会在下一个检查点停下（通常 <1 秒）。\n若日志显示仍在跑，说明它卡在抓屏，最多再等 1.5 秒看门狗。" 
+    BOOL sent = ATLSendStop();
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:sent ? @"已发送强停" : @"停止命令写入失败"
+        message:sent ? @"脚本会在下一个检查点停下（通常 <1 秒）。\n若日志显示仍在跑，说明它卡在抓屏，最多再等 1.5 秒看门狗。" : @"请检查共享目录权限；停止信号尚未投递。" 
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -137,7 +142,8 @@
 
 - (void)refresh {
     [self.scripts removeAllObjects];
-    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:ATLScriptsDir() error:nil];
+    NSString *scriptsPath = ATLScriptsDir();
+    NSArray *files = scriptsPath.length ? [[NSFileManager defaultManager] contentsOfDirectoryAtPath:scriptsPath error:nil] : @[];
     for (NSString *f in files) {
         NSString *ext = f.pathExtension.lowercaseString;
         if ([ext isEqualToString:@"at"] || [ext isEqualToString:@"lua"]) [self.scripts addObject:f];
@@ -178,6 +184,10 @@
         [self refresh];
     }]];
     [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    // iPad action sheets require a source for their popover presentation.
+    UIPopoverPresentationController *popover = sheet.popoverPresentationController;
+    popover.sourceView = tableView;
+    popover.sourceRect = [tableView rectForRowAtIndexPath:indexPath];
     [self presentViewController:sheet animated:YES completion:nil];
 }
 

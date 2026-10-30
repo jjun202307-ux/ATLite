@@ -1,4 +1,5 @@
 #import "ATLWebServer.h"
+#import "ATLFileIO.h"
 #import "../../shared/ATLEmailJob.h"
 #import <arpa/inet.h>
 #import <netinet/in.h>
@@ -145,7 +146,7 @@ static void ATLSendText(int fd, int code, NSString *text) {
     @"const a=document.createElement('a');a.textContent=n;"
     @"a.href='/api/get?dir='+cur+'&name='+encodeURIComponent(n);li.appendChild(a);"
     @"const d=document.createElement('button');d.textContent='删除';"
-    @"d.onclick=async()=>{await fetch('/api/del?dir='+cur+'&name='+encodeURIComponent(n),{method:'DELETE'});load()};"
+    @"d.onclick=async()=>{const r=await fetch('/api/del?dir='+cur+'&name='+encodeURIComponent(n),{method:'DELETE'});if(!r.ok)document.getElementById('log').textContent='删除失败 '+r.status;load()};"
     @"li.appendChild(d);ul.appendChild(li)}}"
     @"async function upload(){const fs=document.getElementById('f').files;"
     @"const logEl=document.getElementById('log');logEl.textContent='';"
@@ -355,8 +356,8 @@ static void ATLSendText(int fd, int code, NSString *text) {
     }
     if ([method isEqualToString:@"DELETE"] && [path isEqualToString:@"/api/del"]) {
         if (!valid) { ATLSendText(fd, 400, @"invalid name"); return; }
-        [[NSFileManager defaultManager] removeItemAtPath:[self pathForName:safe] error:nil];
-        ATLSendText(fd, 200, @"OK");
+        int code = ATLDeleteFile([self pathForName:safe]);
+        ATLSendText(fd, code, code == 200 ? @"OK" : (code == 404 ? @"not found" : @"delete failed"));
         return;
     }
     ATLSendText(fd, 404, @"not found");
@@ -436,6 +437,7 @@ static void *ATLServerThread(void *rawCtx) {
 }
 
 - (BOOL)start {
+    if (!self.rootPath.length) return NO;
     if (self.running) return YES;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return NO;

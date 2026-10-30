@@ -4,6 +4,8 @@ root=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('artifact',root/'tools/verify_artifact.py')
 mod=importlib.util.module_from_spec(spec)
 import sys
+import io, tarfile
+from unittest.mock import patch
 sys.path.insert(0,str(root/'tools'))
 spec.loader.exec_module(mod)
 
@@ -27,6 +29,24 @@ class ArtifactMachO(unittest.TestCase):
         self.assertIs(parsed[0]['entitlements']['platform-application'],True)
         no_sig=struct.pack('<8I',0xfeedfacf,0x100000c,0,2,0,0,0,0)+xml
         self.assertEqual(mod.macho_slices(no_sig)[0]['entitlements'],{})
+
+    def test_malformed_executable_is_reported_without_crashing(self):
+        def archive(entries):
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode='w') as tar:
+                for name, data in entries.items():
+                    member = tarfile.TarInfo(name)
+                    member.size = len(data)
+                    member.mode = 0o755
+                    tar.addfile(member, io.BytesIO(data))
+            return stream.getvalue()
+        members = {
+            'control.tar': archive({'./control': b'Version: 1\nArchitecture: iphoneos-arm64e\n'}),
+            'data.tar': archive({'./Applications/ATLite.app/ATLite': b'broken'})}
+        mod.FAILS.clear(); mod.PASSES.clear()
+        with patch.object(mod, 'parse_ar', return_value=members), patch('sys.stdout', new=io.StringIO()):
+            self.assertEqual(mod.main('me.atlite.ios_1_iphoneos-arm64e.deb'), 1)
+        self.assertIn('parse Mach-O: Applications/ATLite.app/ATLite', mod.FAILS)
 
     def test_truncation_is_rejected(self):
         self.assertTrue(hasattr(mod,'macho_slices'),'real Mach-O parser missing')

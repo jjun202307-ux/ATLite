@@ -85,7 +85,7 @@ jobs:
 
       - name: Build package
         run: |
-          set -x
+          set -eux
           make package FINALPACKAGE=1
           for deb in packages/*.deb; do python3 tools/verify_artifact.py "$deb"; done
           # 探针必须 stage 进 app bundle（出 /var/containers/Bundle 会 exec EPERM）

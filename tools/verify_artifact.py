@@ -118,6 +118,8 @@ def main(deb_path):
                              ('Library/MobileSubstrate/DynamicLibraries/ATLiteTweak.dylib', 6)]:
         member = files.get(executable)
         check('executable present: ' + executable, member is not None and bool(member.mode & 0o111))
+        if member and executable.endswith('/ATLiteProbe'):
+            check('probe archive mode has no setuid/setgid', not member.mode & 0o6000)
         if member:
             try:
                 slices = macho_slices(dt.extractfile(member).read())
@@ -154,7 +156,6 @@ def main(deb_path):
     plist_members = [n for n in names if n.endswith("ATLite.app/Info.plist")]
     check("Info.plist 在位", bool(plist_members))
     if plist_members:
-        import plistlib
         pl = plistlib.loads(dt.extractfile(plist_members[0]).read())
         check("CFBundleExecutable==ATLite", pl.get("CFBundleExecutable") == "ATLite")
         check("版本 %s 与 Info.plist 一致" % ver, pl.get("CFBundleShortVersionString") == ver)

@@ -40,12 +40,12 @@ static ATClientRef (*_ATClientCreate)(CFAllocatorRef);
 static void (*_ATClientDispatch)(ATClientRef, ATEventRef);
 static ATEventRef (*_ATCreateDigitizer)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t,
                                         uint32_t, uint32_t, double, double, double, double,
-                                        double, Boolean, Boolean, uint32_t);
+                                        double, boolean_t, boolean_t, uint32_t);
 static ATEventRef (*_ATCreateFinger)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t,
                                      double, double, double, double, double,
-                                     Boolean, Boolean, uint32_t);
+                                     boolean_t, boolean_t, uint32_t);
 static void (*_ATAppendEvent)(ATEventRef, ATEventRef, uint32_t);
-static void (*_ATSetInt)(ATEventRef, uint32_t, int);
+static void (*_ATSetInt)(ATEventRef, uint32_t, CFIndex);
 static void (*_ATSetFloat)(ATEventRef, uint32_t, double);
 
 // WebKit IOKitSPIIOS.h uses IOHIDFloat = double for these private SPI.
@@ -123,7 +123,7 @@ static size_t (*_ATSurfaceGetHeight)(ATSurfaceRef);
 static void *(*_ATSurfaceGetBase)(ATSurfaceRef);
 static int32_t (*_ATSurfaceLock)(ATSurfaceRef, uint32_t, uint32_t *);
 static kern_return_t (*_ATSurfaceUnlock)(ATSurfaceRef, uint32_t, uint32_t *);
-static int (*_ATRenderDisplay)(uint32_t, CFStringRef, ATSurfaceRef, uint32_t, uint32_t);
+static void (*_ATRenderDisplay)(uint32_t, CFStringRef, ATSurfaceRef, uint32_t, uint32_t);
 
 // R33-B：常见 iPhone 物理像素尺寸表。SpringBoard 侧 spawn 时不方便取 UIScreen
 // （要跳主线程，得再套一层 E30 超时），所以这里不依赖调用方传尺寸：
@@ -139,26 +139,26 @@ static const int kATFallbackSizes[][2] = {
 // Render success also requires a locked, nonempty, readable surface; content is unverified.
 static BOOL ATRenderOne(int w, int h) {
     if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return NO;
-    uint32_t argb = 0x41524742u; // 'ARGB'
+    uint32_t bgra = 0x42475241u; // 'BGRA'
     NSDictionary *props = @{
         @"IOSurfaceIsGlobal":        @YES,
         @"IOSurfaceBytesPerElement": @4,
         @"IOSurfaceBytesPerRow":     @(w * 4),
         @"IOSurfaceWidth":           @(w),
         @"IOSurfaceHeight":          @(h),
-        @"IOSurfacePixelFormat":     @(argb),
+        @"IOSurfacePixelFormat":     @(bgra),
         @"IOSurfaceAllocSize":       @(w * h * 4),
     };
     ATSurfaceRef sf = _ATSurfaceCreate((__bridge CFDictionaryRef)props);
     if (!sf) { P(@"PROBE_P5 RenderDisplay %dx%d surface=NULL", w, h); return NO; }
-    int krr = _ATRenderDisplay(0, CFSTR("LCD"), sf, 0, 0);
+    _ATRenderDisplay(0, CFSTR("LCD"), sf, 0, 0);
     uint32_t seed = 0;
     kern_return_t lockRC = _ATSurfaceLock(sf, 1, &seed);
     size_t width = _ATSurfaceGetWidth(sf), height = _ATSurfaceGetHeight(sf);
     uint8_t *pixels = lockRC == KERN_SUCCESS ? _ATSurfaceGetBase(sf) : NULL;
-    BOOL readable = krr == 0 && lockRC == KERN_SUCCESS && width > 0 && height > 0 && pixels;
+    BOOL readable = lockRC == KERN_SUCCESS && width > 0 && height > 0 && pixels;
     unsigned first = readable ? pixels[0] : 0;
-    P(@"PROBE_P5 RenderDisplay %dx%d kr=%d lock=%d size=%zux%zu readable=%d sample=%02x (pixel correctness unverified)", w, h, krr, lockRC, width, height, readable, first);
+    P(@"PROBE_P5 RenderDisplay %dx%d lock=%d size=%zux%zu readable=%d sample=%02x (pixel correctness unverified)", w, h, lockRC, width, height, readable, first);
     if (lockRC == KERN_SUCCESS) _ATSurfaceUnlock(sf, 1, &seed);
     CFRelease(sf);
     return readable;
@@ -194,12 +194,12 @@ static void probe_framebuffer(int reqW, int reqH) {
     }
     // 优先用调用方给的真实分辨率（App 侧会传 nativeBounds）
     if (reqW > 0 && reqH > 0 && ATRenderOne(reqW, reqH)) {
-        P(@"PROBE_P5 verdict=BUFFER-READABLE (size from caller %dx%d)", reqW, reqH);
+        P(@"PROBE_P5 verdict=BUFFER-READABLE content=UNVERIFIED (size from caller %dx%d)", reqW, reqH);
         return;
     }
     for (size_t i = 0; i < AT_TRY_SIZES; i++) {
         if (ATRenderOne(kATFallbackSizes[i][0], kATFallbackSizes[i][1])) {
-            P(@"PROBE_P5 verdict=BUFFER-READABLE (auto size %dx%d, index=%zu)",
+            P(@"PROBE_P5 verdict=BUFFER-READABLE content=UNVERIFIED (auto size %dx%d, index=%zu)",
               kATFallbackSizes[i][0], kATFallbackSizes[i][1], i);
             return;
         }
