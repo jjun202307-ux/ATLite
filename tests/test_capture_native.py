@@ -20,7 +20,7 @@ class CaptureNative(unittest.TestCase):
 #include <stdarg.h>
 #include <string.h>
 #include "ATCaptureValidation.h"
-typedef CFMutableDataRef IOSurfaceRef;
+/* CoreGraphics already declares IOSurfaceRef. */
 static int mode=0, lockFailure=0, locked=0;
 static size_t width=0,height=0,pitch=0;
 static uint32_t format=0x42475241u;
@@ -32,9 +32,9 @@ static IOSurfaceRef create(CFDictionaryRef props) {
  CFNumberGetValue((CFNumberRef)CFDictionaryGetValue(props,CFSTR("IOSurfaceHeight")),kCFNumberIntType,&h);
  CFNumberGetValue((CFNumberRef)CFDictionaryGetValue(props,CFSTR("IOSurfaceBytesPerRow")),kCFNumberIntType,&p);
  uint32_t f=0; CFNumberGetValue((CFNumberRef)CFDictionaryGetValue(props,CFSTR("IOSurfacePixelFormat")),kCFNumberSInt32Type,&f); assert(f==0x42475241u);
- width=w; height=h; pitch=p; IOSurfaceRef data=CFDataCreateMutable(NULL,p*h); CFDataSetLength(data,p*h); return data;
+ width=w; height=h; pitch=p; CFMutableDataRef data=CFDataCreateMutable(NULL,p*h); CFDataSetLength(data,p*h); return (IOSurfaceRef)data;
 }
-static void *base(IOSurfaceRef s) { return CFDataGetMutableBytePtr(s); }
+static void *base(IOSurfaceRef s) { return CFDataGetMutableBytePtr((CFMutableDataRef)s); }
 static size_t getWidth(IOSurfaceRef s) { return width; }
 static size_t getHeight(IOSurfaceRef s) { return height; }
 static size_t getPitch(IOSurfaceRef s) { return pitch; }
