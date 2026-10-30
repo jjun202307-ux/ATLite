@@ -1,4 +1,4 @@
-// ATLiteTweak v0.3.12 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.13 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -497,8 +497,7 @@ static BOOL gCaptureBroken = NO;
 
 // 在抓屏队列上执行：自建 IOSurface → RenderDisplay 写入。返回 NULL = 失败。
 // 属性键为 IOSurface 公开文档字符串值；像素格式固定 'ARGB'（SO 实证配方）。
-static IOSurfaceRef ATRenderIntoNewSurface(void) {
-    CGSize px = ATScreenPixelSize();
+static IOSurfaceRef ATRenderIntoNewSurface(CGSize px) {
     int w = (int)px.width, h = (int)px.height;
     if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || (size_t)w * h > 16777216) {
         ATLog(@"screen pixel size invalid or too large: %dx%d", w, h); return NULL;
@@ -564,13 +563,16 @@ static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) {
     static NSObject *captureGate;
     dispatch_once(&once, ^{ gCaptureQueue = dispatch_queue_create("me.atlite.capture", DISPATCH_QUEUE_SERIAL); captureGate = [NSObject new]; });
     @synchronized (captureGate) { if (gCaptureBroken) return NULL; }
+    // A main-thread sizing timeout is a missed frame, not a renderer hang.
+    CGSize px = ATScreenPixelSize();
+    if (px.width <= 0 || px.height <= 0) return NULL;
     __block IOSurfaceRef result = NULL;
     __block BOOL abandoned = NO;
     NSObject *gate = [NSObject new];
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     dispatch_async(gCaptureQueue, ^{
         @autoreleasepool {
-            IOSurfaceRef surface = ATRenderIntoNewSurface();
+            IOSurfaceRef surface = ATRenderIntoNewSurface(px);
             @synchronized (gate) {
                 if (abandoned) { if (surface) CFRelease(surface); }
                 else result = surface;
@@ -838,6 +840,8 @@ static int l_rootDir(lua_State *L) {
 }
 // stop(): 终止脚本（AutoTouch 同名 API），以特定错误消息实现
 static int l_stop(lua_State *L) {
+    // Persist cancellation so the enclosing guarded pcall/xpcall cannot swallow it.
+    __sync_lock_test_and_set(&gStopRequested, 1);
     return luaL_error(L, "STOP");
 }
 
@@ -1093,7 +1097,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.12 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.13 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1369,29 +1373,53 @@ static BOOL ATIsSpringBoard(void) {
 
 // R33-C：spawn 出去的子进程退出后必须回收，否则变僵尸挂在常驻的 SpringBoard 名下，
 // 而 SpringBoard 不会替我们 reap —— 每点一次探针就多一个僵尸，累积泄漏 pid 表。
-// 用 dispatch PROC source 在子进程退出时异步回收：不阻塞任何线程。
-// source 必须被强引用持有（ARC 下局部变量一出作用域就被释放，收不到事件）。
+// 串行队列上的非阻塞轮询统一负责回收与超时，无 dispatch source 失败路径。
+#include <errno.h>
 static dispatch_queue_t ATReapQueue(void) {
     static dispatch_queue_t q = NULL;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ q = dispatch_queue_create("me.atlite.reap", DISPATCH_QUEUE_SERIAL); });
     return q;
 }
-static void ATReapChildAsync(pid_t pid) {
-    if (pid <= 0) return;
-    // 让 source 自己持有自己（handler 捕获 src），事件到达后 src = NULL 打破环。
-    // 不借助 NSMutableSet/NSArray 装 dispatch object —— 那要求 dispatch_source_t
-    // 恰好是 ObjC 类型（受 OS_OBJECT_USE_OBJC 影响），属于不必要的编译期假设。
-    __block dispatch_source_t src =
-        dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)pid,
-                               DISPATCH_PROC_EXIT, ATReapQueue());
-    dispatch_source_set_event_handler(src, ^{
-        int st = 0;
-        waitpid(pid, &st, WNOHANG); // 子进程已退出，立即返回，不阻塞
-        dispatch_source_cancel(src);
-        src = NULL;                 // 打破 retain cycle
-    });
-    dispatch_resume(src);
+typedef struct ATProbeReaper {
+    pid_t pid;
+    unsigned polls;
+    unsigned postKillPolls;
+    int killSent;
+} ATProbeReaper;
+
+// One serial owner checks and reaps this child, including the timeout path.
+// It never blocks a worker and stops immediately if another reaper owns the child.
+static void ATProbeReapPoll(void *context) {
+    ATProbeReaper *state = (ATProbeReaper *)context;
+    int status = 0;
+    pid_t result = waitpid(state->pid, &status, WNOHANG);
+    if (result == state->pid || (result < 0 && errno == ECHILD)) {
+        free(state);
+        return;
+    }
+    if (result < 0 && errno != EINTR) {
+        ATLog(@"PROBE_P2 waitpid failed pid=%d errno=%d; child may remain unreaped", state->pid, errno);
+        free(state);
+        return;
+    }
+    if (result == 0 && !state->killSent && ++state->polls >= 80) {
+        state->killSent = 1;
+        int rc = kill(state->pid, SIGKILL);
+        ATLog(@"PROBE_P2 timeout pid=%d kill=%d", state->pid, rc);
+    }
+    if (state->killSent && ++state->postKillPolls >= 300) {
+        ATLog(@"PROBE_P2 reaper stopped pid=%d: child may remain unreaped", state->pid);
+        free(state);
+        return;
+    }
+    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                     ATReapQueue(), state, ATProbeReapPoll);
+}
+
+static void ATReapChildAsync(ATProbeReaper *state) {
+    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                     ATReapQueue(), state, ATProbeReapPoll);
 }
 
 // P2（阶段 0 探针）：SpringBoard 内能否 posix_spawn —— 这是 B 模式保活唯一的悬空点。
@@ -1400,10 +1428,14 @@ static void ATProbeSpawnFromSpringBoard(void) {
     NSString *exe = [ATJBRoot() stringByAppendingPathComponent:@"Applications/ATLite.app/ATLiteProbe"];
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:exe]) { ATLog(@"PROBE_P2 FAIL 二进制缺失: %@", exe); return; }
+    ATProbeReaper *reaper = (ATProbeReaper *)calloc(1, sizeof(*reaper));
+    if (!reaper) { ATLog(@"PROBE_P2 FAIL reaper allocation"); return; }
     posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
+    int actionRC = posix_spawn_file_actions_init(&fa);
+    if (actionRC != 0) { ATLog(@"PROBE_P2 FAIL file actions init rc=%d", actionRC); free(reaper); return; }
     NSString *probeLog = [ATLogsDir() stringByAppendingPathComponent:@"tweak.log"];
-    posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, probeLog.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    actionRC = posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, probeLog.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (actionRC != 0) { ATLog(@"PROBE_P2 FAIL file actions addopen rc=%d", actionRC); posix_spawn_file_actions_destroy(&fa); free(reaper); return; }
     NSString *runId = NSUUID.UUID.UUIDString;
     char *argv[] = { (char *)"ATLiteProbe",
                      (char *)"--run-id", (char *)runId.UTF8String,
@@ -1413,14 +1445,8 @@ static void ATProbeSpawnFromSpringBoard(void) {
     posix_spawn_file_actions_destroy(&fa);
     ATLog(@"PROBE_P2 spawn rc=%d errno=%d exec=%@ pid=%d path=%@",
           rc, rc, [fm isExecutableFileAtPath:exe] ? @"YES" : @"NO", pid, exe);
-    ATReapChildAsync(rc == 0 ? pid : 0);
-    if (rc == 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 8 * NSEC_PER_SEC), ATReapQueue(), ^{
-        int status = 0;
-        if (waitpid(pid, &status, WNOHANG) == 0) {
-            int result = kill(pid, SIGKILL);
-            ATLog(@"PROBE_P2 timeout run=%@ pid=%d kill=%d", runId, pid, result);
-        }
-    });
+    if (rc == 0 && pid > 0) { reaper->pid = pid; ATReapChildAsync(reaper); }
+    else free(reaper);
 }
 
 static BOOL ATValidScriptName(NSString *name) {
@@ -1507,7 +1533,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.12 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.13 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

@@ -265,8 +265,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.12三处同步",
-          "Version: 0.3.12" in ctrl and "<string>0.3.12</string>" in plist_raw and "v0.3.12" in tweak)
+    check("V 版本0.3.13三处同步",
+          "Version: 0.3.13" in ctrl and "<string>0.3.13</string>" in plist_raw and "v0.3.13" in tweak)
 
     # ---- R32: 阶段 0 探针包 v0.3.10（A/B 双模式可行性验证 P1-P5）----
     # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义
@@ -323,9 +323,9 @@ def main(root):
           "kATFallbackSizes" in probe_main
           and "AT_TRY_SIZES" in probe_main)
     # C SpringBoard 内 spawn 从不 waitpid → 每点一次留一个僵尸进程挂在 SpringBoard 名下
-    #   （常驻进程，不会自动 reap）。用 DISPATCH_SOURCE_TYPE_PROC 异步回收，零阻塞。
+    #   非阻塞轮询使用同一所有者处理回收和超时；行为由原生测试验证。
     check("R33-C SpringBoard 侧回收子进程（禁 spawn 后不 reap）",
-          "DISPATCH_SOURCE_TYPE_PROC" in tweak and "DISPATCH_PROC_EXIT" in tweak)
+          "ATProbeReapPoll" in tweak and "waitpid(state->pid, &status, WNOHANG)" in tweak)
     # D: All surface readers must be guarded together before use.
     check("R33-D probe 抓屏读数三个符号全部判空",
           bool(re.search(r"if\s*\([^)]*!_ATSurfaceGetBase[^)]*!_ATSurfaceGetWidth[^)]*!_ATSurfaceGetHeight", strip_comments(probe_main))))

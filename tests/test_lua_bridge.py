@@ -16,27 +16,34 @@ class LuaBridge(unittest.TestCase):
         if not cc: self.skipTest('C compiler required (CI provides cc)')
         command=[cc]+(['cc'] if 'zig' in pathlib.Path(cc).stem.lower() else [])
         touch_body=re.search(r'static int l_touchDown\(lua_State \*L\) \{(.*?)\n\}',source,re.S).group(1)
+        stop_body=re.search(r'static int l_stop\(lua_State \*L\) \{(.*?)\n\}',source,re.S).group(1)
         code='''#include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
 #include <assert.h>
 #include <stdio.h>
 static int stopped=0;
+static volatile int gStopRequested=0;
 static int requestStop(lua_State *L){(void)L;stopped=1;return 0;}
 static int noop(lua_State *L){(void)L; return 0;}
 static int touches=0;
 static void ATSimulateTouch(int a,int f,float x,float y){(void)a;(void)f;(void)x;(void)y;touches++;}
 static void ATCheckScript(lua_State *L);
 static int l_touchDown(lua_State *L){'''+touch_body+'''}
-static const luaL_Reg ATLuaFuncs[]={{"log",noop},{"touchDown",l_touchDown},{"requestStop",requestStop},{NULL,NULL}};
+static int l_stop(lua_State *L){'''+stop_body+'''}
+static const luaL_Reg ATLuaFuncs[]={{"log",noop},{"touchDown",l_touchDown},{"stop",l_stop},{"requestStop",requestStop},{NULL,NULL}};
 static unsigned arc4random_uniform(unsigned n){return n?123:0;}
-static void ATCheckScript(lua_State *L){if(stopped) luaL_error(L,"STOP");}
+static void ATCheckScript(lua_State *L){if(stopped || gStopRequested) luaL_error(L,"STOP");}
 '''+guard_code+'''
 static int ATInitializeLua(lua_State *L){'''+body+'''}
 int main(void){lua_State *L=luaL_newstate(); assert(L);
 lua_pushcfunction(L,ATInitializeLua); assert(lua_pcall(L,0,0,0)==0);
 assert(luaL_dostring(L,"assert(type(touchDown)=='function'); assert(type(log)=='function'); assert(os==nil and io==nil and debug==nil and package==nil and loadfile==nil and dofile==nil and load==nil and setmetatable==nil and getmetatable==nil); assert(type(table.sort)=='function'); assert(type(math.random)=='function')")==0);
 assert(luaL_dostring(L,"assert(pcall(function() return 7 end)); local ok,e=xpcall(function() error('ordinary') end,function(e) return e end); assert(not ok)")==0);
+assert(luaL_dostring(L,"local ok=pcall(stop); resumed=true")!=0); lua_pop(L,1);
+lua_getglobal(L,"resumed"); assert(lua_isnil(L,-1)); lua_pop(L,1); gStopRequested=0;
+assert(luaL_dostring(L,"local ok=xpcall(stop,function(e) return e end); resumed=true")!=0); lua_pop(L,1);
+lua_getglobal(L,"resumed"); assert(lua_isnil(L,-1)); lua_pop(L,1); gStopRequested=0;
 stopped=1;
 assert(luaL_dostring(L,"touchDown(0,1,2)")!=0 && touches==0); lua_pop(L,1);
 assert(luaL_dostring(L,"local ok=pcall(function() error('STOP') end); return ok")!=0); lua_pop(L,1);

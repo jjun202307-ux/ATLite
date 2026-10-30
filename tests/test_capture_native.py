@@ -57,7 +57,7 @@ static int32_t (*_AT_IOSurfaceUnlock)(IOSurfaceRef,uint32_t,uint32_t *)=unlockSu
 static BOOL gCaptureReady=YES;
 typedef struct { uint8_t *rgba;int w,h; } ATBitmap;
 '''+function('ATRenderIntoNewSurface')+r'''
-static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) { return ATRenderIntoNewSurface(); }
+static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) { return ATRenderIntoNewSurface(ATScreenPixelSize()); }
 '''+function('ATCaptureScreen')+r'''
 typedef struct { const char *bytes[3]; size_t len[3]; int n; } lua_State;
 static int lua_gettop(lua_State *L) { return L->n; }
