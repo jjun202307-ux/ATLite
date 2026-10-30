@@ -265,8 +265,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.13三处同步",
-          "Version: 0.3.13" in ctrl and "<string>0.3.13</string>" in plist_raw and "v0.3.13" in tweak)
+    check("V 版本0.3.14三处同步",
+          "Version: 0.3.14" in ctrl and "<string>0.3.14</string>" in plist_raw and "v0.3.14" in tweak)
 
     # ---- R32: 阶段 0 探针包 v0.3.10（A/B 双模式可行性验证 P1-P5）----
     # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义
@@ -376,13 +376,13 @@ def main(root):
     check("R25-C HID 事件节流", "ATThrottleEvents" in tweak_code)
 
     # ---- R26/E26: 强停兜底（脚本跑在 SpringBoard，杀 App 无效）----
-    check("R26-E26 tweak 侧停止标志", "gStopRequested" in tweak_code)
+    check("R26-E26 tweak 侧停止代次", "gStopGeneration" in tweak_code and "gRunStopGeneration" in tweak_code)
     check("R26-E26 停止双通道(通知+flag文件)",
-          "ATStopFlagPath" in tweak_code and "fileExistsAtPath:ATStopFlagPath" in tweak_code)
+          "ATStopFlagPath" in tweak_code and "ATLReadStopFile" in tweak_code and "stopSnapshot" in tweak_code)
     check("R26-E26 hook 检查停止", "ATShouldStop" in tweak_code)
     check("R26-E26 sleep 分片可中断",
           tweak_code.count("ATShouldStop") >= 3)  # hook + usleep + msleep
-    check("R26-E26 新脚本前清除停止标志", "ATClearStopFlag" in tweak_code)
+    check("R26-E26 新脚本继承提交时停止快照", "gRunStopSnapshot" in tweak_code and "ATClearStopFlag" not in tweak_code)
     check("R26-E26 tweak 处理 stop 命令",
           'isEqualToString:@"stop"' in tweak_code)
     check("R26-E26 App 侧停止命令模块", os.path.isfile(os.path.join(root, "app/Source/ATLCommand.m")))
@@ -429,8 +429,8 @@ def main(root):
           and "ATWaitForPreviousScripts" not in tweak_code)
     check("复查-2 finally原子释放运行槽",
           bool(re.search(r"@finally\s*\{.*?ATReleaseAllInputs\(\).*?lua_close\(L\).*?__sync_lock_test_and_set\(&gRunningScripts, 0\)", play, re.S)))
-    check("复查-2 原子准入和清stop发生在调度之前",
-          admission >= 0 and admission < tweak_code.find("ATClearStopFlag();", admission)
+    check("复查-2 原子准入和停止快照发布发生在调度之前",
+          admission >= 0 and admission < tweak_code.find("gRunStopSnapshot =", admission)
           < tweak_code.find("dispatch_async", admission) < tweak_code.find("ATPlayLuaFile(path)", admission))
 
     # ---- Lua 接线（编译正确性守卫）----

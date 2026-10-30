@@ -1,4 +1,5 @@
-// ATLiteTweak v0.3.13 — AutoTouch-style script runner (Dopamine roothide only)
+#import "../shared/ATLStopFile.h"
+// ATLiteTweak v0.3.14 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -125,14 +126,25 @@ static NSString *ATStopFlagPath(void) {
 static NSString *ATStatusPath(void) {
     return [ATBaseDir() stringByAppendingPathComponent:@"status.json"];
 }
-static volatile sig_atomic_t gStopRequested = 0;
-static BOOL ATShouldStop(void) {
-    if (__sync_fetch_and_add(&gStopRequested, 0)) return YES;
-    return [[NSFileManager defaultManager] fileExistsAtPath:ATStopFlagPath()];
+// Never clear the shared file: a stop may arrive after the run was submitted.
+// The submitted snapshot identifies the last stop which predates that run.
+static volatile uint32_t gStopGeneration = 0;
+static uint32_t gRunStopGeneration = 0;
+static id gRunStopSnapshot = nil; // base64 string or NSNull; nil means legacy
+static BOOL ATMemoryStopRequested(void) {
+    return __sync_fetch_and_add(&gStopGeneration, 0) != gRunStopGeneration;
 }
-static void ATClearStopFlag(void) {
-    __sync_lock_test_and_set(&gStopRequested, 0);
-    [[NSFileManager defaultManager] removeItemAtPath:ATStopFlagPath() error:nil];
+static BOOL ATShouldStop(void) {
+    if (ATMemoryStopRequested()) return YES;
+    NSString *path = ATStopFlagPath();
+    unsigned char bytes[256]; size_t length = 0;
+    int result = ATLReadStopFile(path.fileSystemRepresentation, bytes, sizeof(bytes), &length);
+    if (result < 0) return YES;
+    if (!result) return NO;
+    NSData *current = [NSData dataWithBytes:bytes length:length];
+    if (!gRunStopSnapshot) return YES; // old clients: conservatively honor any flag
+    if (gRunStopSnapshot == [NSNull null]) return YES;
+    return ![[current base64EncodedStringWithOptions:0] isEqualToString:gRunStopSnapshot];
 }
 static void ATWriteStatus(BOOL running, NSString *name) {
     NSDictionary *d = @{@"running": @(running),
@@ -665,7 +677,7 @@ static BOOL ATRGBAToGray(const ATBitmap *src, ATGray *dst) {
 typedef struct { double deadline; BOOL interrupted; unsigned checks; } ATSearchContext;
 static int ATSearchCancelled(void *opaque) {
     ATSearchContext *context = (ATSearchContext *)opaque;
-    BOOL cancelled = __sync_fetch_and_add(&gStopRequested, 0) != 0;
+    BOOL cancelled = ATMemoryStopRequested();
     if ((context->checks++ & 63u) == 0) {
         @autoreleasepool { cancelled = ATShouldStop(); }
     }
@@ -841,7 +853,7 @@ static int l_rootDir(lua_State *L) {
 // stop(): 终止脚本（AutoTouch 同名 API），以特定错误消息实现
 static int l_stop(lua_State *L) {
     // Persist cancellation so the enclosing guarded pcall/xpcall cannot swallow it.
-    __sync_lock_test_and_set(&gStopRequested, 1);
+    __sync_fetch_and_add(&gStopGeneration, 1);
     return luaL_error(L, "STOP");
 }
 
@@ -1097,7 +1109,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.13 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.14 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1252,7 +1264,7 @@ static void ATEnsureLuaLibraries(void) {
 // E26：强停兜底。
 // 脚本跑在 SpringBoard 进程里，**把 App 从后台划掉对它毫无影响**（App 只是遥控器）。
 // 所以停止必须是"脚本自己能看见"的信号，不能只依赖 App 存活或通知送达：
-//   通道 1（快）：Darwin 通知 → gStopRequested 内存标志
+//   通道 1（快）：Darwin 通知 → gStopGeneration 内存代次
 //   通道 2（兜底）：<jbroot>/.../stop.flag 文件 —— 就算通知中心不工作、
 //                   SpringBoard 主线程忙到不处理回调，脚本下次检查文件时也能停下
 // 两条通道都在 hook（每 10 万指令）与 sleep 分片里被检查。
@@ -1375,6 +1387,7 @@ static BOOL ATIsSpringBoard(void) {
 // 而 SpringBoard 不会替我们 reap —— 每点一次探针就多一个僵尸，累积泄漏 pid 表。
 // 串行队列上的非阻塞轮询统一负责回收与超时，无 dispatch source 失败路径。
 #include <errno.h>
+#include <stdio.h>
 static dispatch_queue_t ATReapQueue(void) {
     static dispatch_queue_t q = NULL;
     static dispatch_once_t once;
@@ -1383,6 +1396,7 @@ static dispatch_queue_t ATReapQueue(void) {
 }
 typedef struct ATProbeReaper {
     pid_t pid;
+    char runId[37];
     unsigned polls;
     unsigned postKillPolls;
     unsigned interruptPolls;
@@ -1395,18 +1409,29 @@ static void ATProbeReapPoll(void *context) {
     ATProbeReaper *state = (ATProbeReaper *)context;
     int status = 0;
     pid_t result = waitpid(state->pid, &status, WNOHANG);
-    if (result == state->pid || (result < 0 && errno == ECHILD)) {
+    if (result == state->pid) {
+        if (WIFEXITED(status))
+            ATLog(@"PROBE_P2 run_id=%s pid=%d exited exit_status=%d", state->runId, state->pid, WEXITSTATUS(status));
+        else if (WIFSIGNALED(status))
+            ATLog(@"PROBE_P2 run_id=%s pid=%d signaled signal=%d", state->runId, state->pid, WTERMSIG(status));
+        else
+            ATLog(@"PROBE_P2 run_id=%s pid=%d unexpected wait status=%d", state->runId, state->pid, status);
+        free(state);
+        return;
+    }
+    if (result < 0 && errno == ECHILD) {
+        ATLog(@"PROBE_P2 run_id=%s pid=%d waitpid ECHILD; exit status unavailable", state->runId, state->pid);
         free(state);
         return;
     }
     if (result < 0 && errno != EINTR) {
-        ATLog(@"PROBE_P2 waitpid failed pid=%d errno=%d; child may remain unreaped", state->pid, errno);
+        ATLog(@"PROBE_P2 run_id=%s pid=%d waitpid failed errno=%d; child may remain unreaped", state->runId, state->pid, errno);
         free(state);
         return;
     }
     if (result < 0 && errno == EINTR) {
         if (++state->interruptPolls >= 80) {
-            ATLog(@"PROBE_P2 waitpid repeatedly interrupted pid=%d; child may remain unreaped", state->pid);
+            ATLog(@"PROBE_P2 run_id=%s pid=%d waitpid repeatedly interrupted; child may remain unreaped", state->runId, state->pid);
             free(state);
             return;
         }
@@ -1416,10 +1441,11 @@ static void ATProbeReapPoll(void *context) {
     if (result == 0 && !state->killSent && ++state->polls >= 80) {
         state->killSent = 1;
         int rc = kill(state->pid, SIGKILL);
-        ATLog(@"PROBE_P2 timeout pid=%d kill=%d", state->pid, rc);
+        int killErrno = rc == 0 ? 0 : errno;
+        ATLog(@"PROBE_P2 run_id=%s pid=%d timeout kill_rc=%d errno=%d", state->runId, state->pid, rc, killErrno);
     }
     if (state->killSent && ++state->postKillPolls >= 300) {
-        ATLog(@"PROBE_P2 reaper stopped pid=%d: child may remain unreaped", state->pid);
+        ATLog(@"PROBE_P2 run_id=%s pid=%d reaper stopped: child may remain unreaped", state->runId, state->pid);
         free(state);
         return;
     }
@@ -1435,26 +1461,27 @@ static void ATReapChildAsync(ATProbeReaper *state) {
 // P2（阶段 0 探针）：SpringBoard 内能否 posix_spawn —— 这是 B 模式保活唯一的悬空点。
 // 与 App 侧共用同一份二进制；stdout 交给探针自己写 probe.log，这里只关心 rc/errno。
 static void ATProbeSpawnFromSpringBoard(void) {
+    NSString *runId = NSUUID.UUID.UUIDString;
     NSString *exe = [ATJBRoot() stringByAppendingPathComponent:@"Applications/ATLite.app/ATLiteProbe"];
     NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:exe]) { ATLog(@"PROBE_P2 FAIL 二进制缺失: %@", exe); return; }
+    if (![fm fileExistsAtPath:exe]) { ATLog(@"PROBE_P2 run_id=%@ pid=0 FAIL 二进制缺失: %@", runId, exe); return; }
     ATProbeReaper *reaper = (ATProbeReaper *)calloc(1, sizeof(*reaper));
-    if (!reaper) { ATLog(@"PROBE_P2 FAIL reaper allocation"); return; }
+    if (!reaper) { ATLog(@"PROBE_P2 run_id=%@ pid=0 FAIL reaper allocation", runId); return; }
     posix_spawn_file_actions_t fa;
     int actionRC = posix_spawn_file_actions_init(&fa);
-    if (actionRC != 0) { ATLog(@"PROBE_P2 FAIL file actions init rc=%d", actionRC); free(reaper); return; }
+    if (actionRC != 0) { ATLog(@"PROBE_P2 run_id=%@ pid=0 FAIL file actions init rc=%d", runId, actionRC); free(reaper); return; }
     NSString *probeLog = [ATLogsDir() stringByAppendingPathComponent:@"tweak.log"];
     actionRC = posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, probeLog.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (actionRC != 0) { ATLog(@"PROBE_P2 FAIL file actions addopen rc=%d", actionRC); posix_spawn_file_actions_destroy(&fa); free(reaper); return; }
-    NSString *runId = NSUUID.UUID.UUIDString;
+    if (actionRC != 0) { ATLog(@"PROBE_P2 run_id=%@ pid=0 FAIL file actions addopen rc=%d", runId, actionRC); posix_spawn_file_actions_destroy(&fa); free(reaper); return; }
+    snprintf(reaper->runId, sizeof(reaper->runId), "%s", runId.UTF8String);
     char *argv[] = { (char *)"ATLiteProbe",
                      (char *)"--run-id", (char *)runId.UTF8String,
                      (char *)"--from", (char *)"springboard", NULL };
     pid_t pid = 0;
     int rc = posix_spawn(&pid, exe.fileSystemRepresentation, &fa, NULL, argv, NULL);
     posix_spawn_file_actions_destroy(&fa);
-    ATLog(@"PROBE_P2 spawn rc=%d errno=%d exec=%@ pid=%d path=%@",
-          rc, rc, [fm isExecutableFileAtPath:exe] ? @"YES" : @"NO", pid, exe);
+    ATLog(@"PROBE_P2 run_id=%@ spawn rc=%d errno=%d exec=%@ pid=%d path=%@",
+          runId, rc, rc, [fm isExecutableFileAtPath:exe] ? @"YES" : @"NO", pid, exe);
     if (rc == 0 && pid > 0) { reaper->pid = pid; ATReapChildAsync(reaper); }
     else free(reaper);
 }
@@ -1466,8 +1493,26 @@ static BOOL ATValidScriptName(NSString *name) {
     return [@[@"at", @"lua"] containsObject:name.pathExtension.lowercaseString];
 }
 
+// Legacy senders without IDs retain their existing at-least-once semantics.
+// Keep the latest 4096 IDs in insertion order. After eviction or a SpringBoard
+// restart, an older delayed command can no longer be guaranteed deduplicated.
+static BOOL ATClaimCommandID(id commandID) {
+    if (![commandID isKindOfClass:NSString.class] || ![commandID length]) return YES;
+    static const NSUInteger ATCommandIDCapacity = 4096;
+    static NSMutableOrderedSet *seen;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ seen = [NSMutableOrderedSet orderedSet]; });
+    @synchronized (seen) {
+        if ([seen containsObject:commandID]) return NO;
+        if (seen.count == ATCommandIDCapacity) [seen removeObjectAtIndex:0];
+        [seen addObject:commandID];
+        return YES;
+    }
+}
+
 static void ATHandleCommand(void) {
     if (!ATIsSpringBoard()) return;
+    uint32_t observedStopGeneration = __sync_fetch_and_add(&gStopGeneration, 0);
     NSString *cmdPath = [ATBaseDir() stringByAppendingPathComponent:@"command.json"];
     NSData *data = [NSData dataWithContentsOfFile:cmdPath];
     if (!data) return;
@@ -1476,12 +1521,13 @@ static void ATHandleCommand(void) {
     NSString *action = cmd[@"cmd"];
     NSString *script = cmd[@"script"] ?: @"";
     if (![action isKindOfClass:NSString.class] || !action.length) return;
+    if (!ATClaimCommandID(cmd[@"commandId"])) return;
     ATLog(@"command: %@ (%@)", action, script);
 
     // E26：强停。不要求 ATIsSpringBoard —— 任何注入进程收到都先落内存标志，
     // 但要真正中止脚本只有 SpringBoard 里那个 hook 会读到它。
     if ([action isEqualToString:@"stop"]) {
-        __sync_lock_test_and_set(&gStopRequested, 1);
+        __sync_fetch_and_add(&gStopGeneration, 1);
         ATLog(@"stop requested (cooperative cancellation; waiting for actual exit)");
         return;
     }
@@ -1504,8 +1550,11 @@ static void ATHandleCommand(void) {
         if (!__sync_bool_compare_and_swap(&gRunningScripts, 0, 1)) {
             ATLog(@"run rejected: previous script is still active; stop and wait for exit"); return;
         }
-        // Clear the old cancellation before accepting this run. A subsequent stop persists.
-        ATClearStopFlag();
+        // Publish the pre-admission generation: a concurrent notification cannot
+        // be erased by resetting a boolean after the running CAS.
+        gRunStopGeneration = observedStopGeneration;
+        id snapshot = cmd[@"stopSnapshot"];
+        gRunStopSnapshot = (snapshot == [NSNull null] || [snapshot isKindOfClass:NSString.class]) ? snapshot : nil;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             @autoreleasepool { ATPlayLuaFile(path); }
         });
@@ -1543,7 +1592,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.13 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.14 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

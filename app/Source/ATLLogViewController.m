@@ -92,7 +92,7 @@
 - (void)stopScript {
     BOOL sent = ATLSendStop();
     [self reload];
-    if (!sent) self.pathLabel.text = @"停止命令写入失败，请检查目录权限";
+    if (!sent) self.pathLabel.text = @"停止信号未能可靠保存，请检查目录权限并重试";
 }
 
 // App output is captured directly. P2 is asynchronous and reported in tweak.log;

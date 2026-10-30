@@ -125,8 +125,8 @@
 
 - (void)stopScript {
     BOOL sent = ATLSendStop();
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:sent ? @"已发送强停" : @"停止命令写入失败"
-        message:sent ? @"脚本会在下一个检查点停下（通常 <1 秒）。\n若日志显示仍在跑，说明它卡在抓屏，最多再等 1.5 秒看门狗。" : @"请检查共享目录权限；停止信号尚未投递。" 
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:sent ? @"已发送停止" : @"停止命令写入失败"
+        message:sent ? @"脚本将在下一个检查点停止，系统调用可能需要等待。" : @"停止信号未能可靠保存，请检查共享目录权限并重试。"
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
