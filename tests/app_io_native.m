@@ -18,6 +18,14 @@ int main(void) {
         NSFileManager *fm = NSFileManager.defaultManager;
         NSCAssert([fm createDirectoryAtPath:dir withIntermediateDirectories:NO attributes:nil error:nil], @"temp directory");
         @try {
+            NSString *diagnostic = [dir stringByAppendingPathComponent:@"fresh/logs/probe-app.log"];
+            NSError *diagnosticError = nil;
+            NSCAssert(ATLWriteDiagnosticResult(@"中文诊断", diagnostic, &diagnosticError), @"save before tweak creates logs");
+            NSCAssert([[NSString stringWithContentsOfFile:diagnostic encoding:NSUTF8StringEncoding error:nil] isEqual:@"中文诊断"], @"actual UTF8 result persisted");
+            NSCAssert(ATLWriteDiagnosticResult(@"second", diagnostic, &diagnosticError), @"existing directory and atomic replacement");
+            NSCAssert(!ATLWriteDiagnosticResult(@"bad", [diagnostic stringByAppendingPathComponent:@"child"], &diagnosticError) && diagnosticError, @"parent file is a real error");
+            diagnosticError = nil;
+            NSCAssert(!ATLWriteDiagnosticResult(@"bad", nil, &diagnosticError) && diagnosticError, @"unknown root rejected");
             commandPath = nil; stopPath = nil;
             NSCAssert(!ATLSendCommand(@"run",@"test.at") && !ATLSendStop() && notifications == 0, @"unknown root must fail closed");
             commandPath = [dir stringByAppendingPathComponent:@"missing/command.json"];

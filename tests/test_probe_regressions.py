@@ -14,6 +14,16 @@ class ProbeSafetyContracts(unittest.TestCase):
  def test_main_thread_screen(self): self.assertIn('NSThread.isMainThread',self.a); self.assertIn('dispatch_semaphore_wait',self.a)
  def test_no_fake_ui_completion(self): self.assertNotIn('containsString:@"from=springboard"',self.u); self.assertIn('self.autoRefresh = NO',self.u); self.assertIn('P2',self.u)
 
+ def test_probe_save_prepares_its_own_directory(self):
+  helper=(ROOT/'app/Source/ATLFileIO.h').read_text(encoding='utf-8-sig')
+  self.assertIn('ATLWriteDiagnosticResult',self.a,'probe must save independently of tweak initialization')
+  self.assertIn('createDirectoryAtPath:',helper,'diagnostic save must create missing parent directories')
+  self.assertNotIn('App 结果保存于 probe-app.log。',self.u,'UI cannot claim save succeeded unconditionally')
+
+ def test_missing_log_does_not_assert_injection_state(self):
+  self.assertNotIn('→ tweak 未注入 SpringBoard',self.u)
+  self.assertNotIn('→ tweak 已注入，但还没写过日志',self.u)
+
 
  def test_release_events_ready_before_touch_down(self):
   dispatch = self.p.index('_ATClientDispatch(client, hand);')

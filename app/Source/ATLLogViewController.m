@@ -8,7 +8,7 @@
 // E24：日志查看页。职责：
 //  1) 显示 <jbroot>/var/mobile/Library/ATLite/logs/tweak.log（多路径探测，容忍 jbroot 推导差异）
 //  2) 找不到时输出诊断信息（候选路径 + 目录是否存在），直接区分
-//     "tweak 没注入" 与 "注入了但没收到命令"
+//     只报告文件证据，不能仅凭目录存在性判断注入
 //  3) 自动刷新，运行脚本时可实时看到输出
 
 @interface ATLLogViewController ()
@@ -110,7 +110,7 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *out = ATLRunProbe(@"app");
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.text.text = [(probeSent ? out : [@"SpringBoard 探针命令写入失败；以下仅为 App 探针。\n" stringByAppendingString:out]) stringByAppendingString:probeSent ? @"\n\nP2: 已发送 SpringBoard 探针请求，未确认完成。请点刷新查看 tweak.log 中本次 run_id 的 spawn、PROBE_END 和退出状态；begin 只表示开始。App 结果保存于 probe-app.log。" : @"\n\nP2: 未投递，命令文件写入失败。App 结果保存于 probe-app.log。"];
+            self.text.text = [(probeSent ? out : [@"SpringBoard 探针命令写入失败；以下仅为 App 探针。\n" stringByAppendingString:out]) stringByAppendingString:probeSent ? @"\n\nP2: 已发送 SpringBoard 探针请求，未确认完成。请点刷新查看 tweak.log 中本次 run_id 的 spawn、PROBE_END 和退出状态；begin 只表示开始。App 结果保存状态见上方输出。" : @"\n\nP2: 未投递，命令文件写入失败。App 结果保存状态见上方输出。"];
             self.text.textColor = [UIColor blackColor];
             self.pathLabel.text = probeSent ? @"App 诊断结果（自动刷新: 关；P2 请查看 tweak.log）" : @"App 诊断结果（P2 投递失败）";
         });
@@ -158,15 +158,15 @@
         // 诊断模式：把所有候选路径与目录状态摆出来，一眼区分"没注入"与"没收到命令"
         NSMutableString *s = [NSMutableString string];
         [s appendString:@"未找到 tweak.log —— 诊断信息如下\n\n"];
-        [s appendFormat:@"jbroot（App 侧推导）: %@\n", ATLJBRoot()];
+        [s appendFormat:@"App 版本: %@\njbroot（App 侧推导）: %@\n", [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown", ATLJBRoot()];
         [s appendString:@"\n候选路径：\n"];
         for (NSString *c in ATLLogCandidatePaths()) {
             BOOL dirOK = [fm fileExistsAtPath:[c stringByDeletingLastPathComponent]];
             [s appendFormat:@"  %@\n     → logs 目录%@\n", c, dirOK ? @"存在" : @"不存在"];
         }
         [s appendString:@"\n判断方法：\n"];
-        [s appendString:@"  全部『不存在』 → tweak 未注入 SpringBoard（装完需 respring / 重启设备）\n"];
-        [s appendString:@"  logs 目录存在但无 log 文件 → tweak 已注入，但还没写过日志\n"];
+        [s appendString:@"  目录不存在：可能未加载、初始化失败、路径不一致或权限不足；安装后需重启桌面。\n"];
+        [s appendString:@"  目录存在但无日志：仍不能确认注入，请检查插件加载与写入错误。\n"];
         [s appendString:@"  有 log 但只有载入行、无 command 行 → 命令没送达（检查 App 与 tweak 的 jbroot 是否一致）\n"];
         self.text.text = s;
         self.text.textColor = [UIColor darkTextColor];

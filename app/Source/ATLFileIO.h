@@ -4,6 +4,17 @@
 #import <unistd.h>
 #import <errno.h>
 
+// Diagnostics must remain writable when the SpringBoard plugin never initialized.
+static inline BOOL ATLWriteDiagnosticResult(NSString *text, NSString *path, NSError **error) {
+    if (!text || !path.isAbsolutePath) {
+        if (error) *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteInvalidFileNameError userInfo:nil];
+        return NO;
+    }
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:path.stringByDeletingLastPathComponent
+            withIntermediateDirectories:YES attributes:nil error:error]) return NO;
+    return [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:error];
+}
+
 // Bounded regular-file read: never allocate or decode the full log.
 static inline NSString *ATLReadLogTail(NSString *path, NSUInteger limit) {
     if (!limit || !path.length) return nil;

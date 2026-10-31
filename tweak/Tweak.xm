@@ -1,5 +1,6 @@
 #import "../shared/ATLStopFile.h"
-// ATLiteTweak v0.3.14 — AutoTouch-style script runner (Dopamine roothide only)
+#import "../shared/ATLJBRootPath.h"
+// ATLiteTweak v0.3.15 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -69,10 +70,9 @@ static NSString *ATJBRoot(void) {
         // ⚠ C1 教训：本 block 内禁止 ATLog（ATLog→ATLogsDir→ATBaseDir→ATJBRoot 重入死锁）
         Dl_info info;
         if (dladdr((void *)ATJBRoot, &info) && info.dli_fname) {
-            NSString *selfPath = [NSString stringWithUTF8String:info.dli_fname];
-            NSRange r = [selfPath rangeOfString:@"/Library/MobileSubstrate/DynamicLibraries/"];
-            if (r.location != NSNotFound && r.location > 0) {
-                root = [selfPath substringToIndex:r.location];
+            size_t prefixLength = ATLRootPrefixLengthForTweakPath(info.dli_fname);
+            if (prefixLength) {
+                root = [[NSString alloc] initWithBytes:info.dli_fname length:prefixLength encoding:NSUTF8StringEncoding];
                 gJBRootSource = @"dladdr";
             }
         }
@@ -84,6 +84,8 @@ static NSString *ATJBRoot(void) {
         void *libroot = NULL;
         if (!getPrefix) {
             libroot = dlopen("@rpath/libroot.dylib", RTLD_NOW);
+            if (!libroot && ownRoot.length)
+                libroot = dlopen([[ownRoot stringByAppendingPathComponent:@"usr/lib/libroot.dylib"] fileSystemRepresentation], RTLD_NOW | RTLD_LOCAL);
             if (libroot) getPrefix = (ATGetJBRootPrefix)dlsym(libroot, "libroot_get_jbroot_prefix");
         }
         if (getPrefix) {
@@ -1109,7 +1111,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.14 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.15 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1599,7 +1601,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.14 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.15 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

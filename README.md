@@ -1,10 +1,10 @@
-# ATLite 0.3.11 源码开发版
+# ATLite 轻量自动化（最近构建 0.3.14）
 
 面向 Dopamine roothide 的轻量工具：图色/OCR、点击滑动、抖动与时间戳、局域网邮箱任务。
 
 第一次使用先看 [使用说明](使用说明.md)：包括脚本编辑格式、上传运行、点位设置和邮箱完整流程。
 
-**这是修改后的源码，不含新版 deb；完整 Theos 构建和真机验收尚未执行。** 原始 v0.3.10 未改动。
+**已构建 0.3.14 deb，真机验收未通过。** 当前正在定位用户反馈的日志缺失与插件加载问题；见 [构建状态](BUILD_STATUS.md) 和 [真机调试记录](docs/DEVICE_DEBUG_2026-10-31.md)。原始 v0.3.10 未改动。
 
 ## 核心流程
 
@@ -23,7 +23,7 @@ curl.exe "http://手机IP:8080/api/result?jobId=返回的jobId"
 
 ## 构建与验证
 
-Theos 工程在 src/；其内容作为仓库根时可使用附带 GitHub Actions。已有 Theos 环境时：
+本仓库根目录为 Theos 工程，可使用附带 GitHub Actions。交付源码压缩包内对应 src/。已有 Theos 环境时：
 
 ```bash
 python3 -m pip install lupa==2.8

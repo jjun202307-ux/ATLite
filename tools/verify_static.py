@@ -265,8 +265,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.14三处同步",
-          "Version: 0.3.14" in ctrl and "<string>0.3.14</string>" in plist_raw and "v0.3.14" in tweak)
+    check("V 版本0.3.15三处同步",
+          "Version: 0.3.15" in ctrl and "<string>0.3.15</string>" in plist_raw and "v0.3.15" in tweak)
 
     # ---- R32: 阶段 0 探针包 v0.3.10（A/B 双模式可行性验证 P1-P5）----
     # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义
@@ -299,7 +299,8 @@ def main(root):
           "ATSurfaceRef" in probe_main and "ATFBConn" in probe_main and "AT_TRANSDUCER_HAND" in probe_main)
     check("R32 探针stdout由App有界落盘",
           "fflush(stdout)" in probe_main and "probe-app.log" in app_probe
-          and "AT_PROBE_MAX_OUTPUT" in app_probe and "writeToFile:path atomically:YES" in app_probe)
+          and "AT_PROBE_MAX_OUTPUT" in app_probe and "ATLWriteDiagnosticResult(result, path" in app_probe
+          and "createDirectoryAtPath:" in read(root, "app/Source/ATLFileIO.h"))
     check("R32 App 侧用 posix_spawn（禁私有 NSTask）",
           "posix_spawn" in app_probe and "NSTask" not in app_probe)
     check("R32 App 侧 P1 标记", "PROBE_P1" in app_probe)

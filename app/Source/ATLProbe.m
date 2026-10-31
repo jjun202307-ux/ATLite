@@ -1,5 +1,6 @@
 #import "ATLProbe.h"
 #import "ATLPaths.h"
+#import "ATLFileIO.h"
 #import <UIKit/UIKit.h>
 #import <spawn.h>
 #import <sys/wait.h>
@@ -100,7 +101,9 @@ NSString *ATLRunProbe(NSString *from) {
     // Save only on the mobile App side. Latest result replaces prior bounded output.
     NSString *path = [ATLLogsDir() stringByAppendingPathComponent:@"probe-app.log"];
     NSError *saveError = nil;
-    if (![result writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&saveError])
-        result = [result stringByAppendingFormat:@"\nApp result save failed: %@", saveError.localizedDescription];
+    if (!ATLWriteDiagnosticResult(result, path, &saveError))
+        result = [result stringByAppendingFormat:@"\nApp result save failed: %@ (path=%@)", saveError.localizedDescription, path];
+    else
+        result = [result stringByAppendingFormat:@"\nApp result saved: %@", path];
     return result;
 }
