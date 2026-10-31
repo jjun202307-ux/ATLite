@@ -1,0 +1,46 @@
+[15:03:17] [lua] HOME_ICON_OCR_TEST_BEGIN
+[15:03:21] [lua] ICON_FAILED findImage: search exceeded 2s computation budget
+[15:03:21] [lua] AFTER_ICON 3:03
+[15:03:21] [lua] AFTER_ICON 11
+[15:03:21] [lua] AFTER_ICON TrollStore
+[15:03:21] [lua] AFTER_ICON 4
+[15:03:21] [lua] AFTER_ICON Settings
+[15:03:21] [lua] AFTER_ICON RootHide
+[15:03:21] [lua] AFTER_ICON Jo
+[15:03:21] [lua] AFTER_ICON Sileo
+[15:03:21] [lua] AFTER_ICON RootHidelnject
+[15:03:21] [lua] AFTER_ICON AMG
+[15:03:21] [lua] AFTER_ICON App Store
+[15:03:21] [lua] AFTER_ICON AMG
+[15:03:21] [lua] AFTER_ICON Root Hidl
+[15:03:21] [lua] AFTER_ICON Dopamine
+[15:03:21] [lua] AFTER_ICON Vinted
+[15:03:21] [lua] AFTER_ICON Q search
+[15:03:21] [lua] AFTER_ICON Utilities
+[15:03:21] [lua] AFTER_ICON Safari
+[15:03:21] [lua] AFTER_ICON Shadowrocket
+[15:03:21] [lua] AFTER_ICON ATLite
+[15:03:24] [lua] OCR_NAME_FOUND 62 367
+[15:03:26] [lua] AFTER_NAME 3:03
+[15:03:26] [lua] AFTER_NAME 11
+[15:03:26] [lua] AFTER_NAME TrollStore
+[15:03:26] [lua] AFTER_NAME 4
+[15:03:26] [lua] AFTER_NAME Settings
+[15:03:26] [lua] AFTER_NAME RootHide
+[15:03:26] [lua] AFTER_NAME Jo
+[15:03:26] [lua] AFTER_NAME Sileo
+[15:03:26] [lua] AFTER_NAME RootHidelnject
+[15:03:26] [lua] AFTER_NAME AMG
+[15:03:26] [lua] AFTER_NAME App Store
+[15:03:26] [lua] AFTER_NAME AMG
+[15:03:26] [lua] AFTER_NAME Root Hidl
+[15:03:26] [lua] AFTER_NAME Dopamine
+[15:03:26] [lua] AFTER_NAME Vinted
+[15:03:26] [lua] AFTER_NAME Q search
+[15:03:26] [lua] AFTER_NAME Utilities
+[15:03:26] [lua] AFTER_NAME Safari
+[15:03:26] [lua] AFTER_NAME Shadowrocket
+[15:03:26] [lua] AFTER_NAME ATLite
+[15:03:26] [lua] HOME_ICON_OCR_TEST_END
+[15:03:26] script finished: home_icon_ocr_test.at
+

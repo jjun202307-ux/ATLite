@@ -45,7 +45,7 @@ def main(root):
 
     # ---- R1/E1: dlsym 符号名必须带 Value 后缀；禁止裸 IOHIDEventSetInteger（代码层）----
     set_syms = re.findall(r'"(IOHIDEventSet[A-Za-z]+)"', tweak_code)
-    check("R1-E1 setter符号名", set_syms and all(s.endswith("Value") for s in set_syms),
+    check("R1-E1 setter符号名", set_syms and all(s.endswith("Value") or s=="IOHIDEventSetSenderID" for s in set_syms),
           str(set_syms))
     check("R1-E1 无裸SetInteger引用",
           not re.search(r'IOHIDEventSetInteger(?!Value)', tweak_code))
@@ -265,8 +265,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.17三处同步",
-          "Version: 0.3.17" in ctrl and "<string>0.3.17</string>" in plist_raw and "v0.3.17" in tweak)
+    check("V 版本0.3.18三处同步",
+          "Version: 0.3.18" in ctrl and "<string>0.3.18</string>" in plist_raw and "v0.3.18" in tweak)
 
     # ---- R32: 阶段 0 探针包 v0.3.10（A/B 双模式可行性验证 P1-P5）----
     # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义

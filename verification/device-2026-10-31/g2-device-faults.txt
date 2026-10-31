@@ -1,0 +1,64 @@
+
+TIMEOUT_STATUS
+{"running":false,"script":"device_smoke_v15.at","time":815147855.32942796}
+CRASH_STATUS
+{"running":false,"script":"device_smoke_v15.at","time":815147857.68435502}
+STOP_STATUS
+{"running":false,"script":"device_smoke_v15.at","time":815147860.99676502}
+RECOVERED_STATUS
+{"running":false,"script":"device_smoke_v15.at","time":815147863.93371105}[14:56:45] [lua] ocr boolean table
+[14:56:45] [lua] ocr_count 10
+[14:56:45] [lua] ocr_line 2:56
+[14:56:45] [lua] ocr_line 2:56
+[14:56:45] [lua] ocr_line ATLite C 日志口停止
+[14:56:45] [lua] ocr_line 电脑访问：http://192.168.2.127:8080
+[14:56:45] [lua] ocr_line 上传.at 脚本与.png 搜图模板（同一 Wi-Fi)
+[14:56:45] [lua] ocr_line device_page_v15.at
+[14:56:45] [lua] ocr_line device_ smoke_ v15.at
+[14:56:45] [lua] ocr_line device_ stop_ v15.at
+[14:56:45] [lua] ocr_line email_roundtrip.at
+[14:56:45] [lua] ocr_line test.at
+[14:56:45] [lua] DEVICE_SMOKE_V15_END
+[14:56:45] script finished: device_smoke_v15.at
+[14:57:27] command: run (device_smoke_v15.at)
+[14:57:27] [lua] DEVICE_SMOKE_V15_BEGIN
+[14:57:27] [lua] size 414.0 896.0
+[14:57:27] [lua] getColor boolean 16777215
+[14:57:35] OCR request=944C057D-C0F9-42C7-9B24-E93ACDC415D6 process failed status=3 errno=0 reaped=1 exit=-1 signal=9
+[14:57:35] [lua] ocr boolean string
+[14:57:35] [lua] ocr_error ocrText: screen capture or OCR unavailable
+[14:57:35] [lua] DEVICE_SMOKE_V15_END
+[14:57:35] script finished: device_smoke_v15.at
+[14:57:37] command: run (device_smoke_v15.at)
+[14:57:37] [lua] DEVICE_SMOKE_V15_BEGIN
+[14:57:37] [lua] size 414.0 896.0
+[14:57:37] [lua] getColor boolean 16777215
+[14:57:37] OCR request=8BC293B1-1437-46C6-A6C9-E5C5ABAD024C process failed status=7 errno=0 reaped=1 exit=-1 signal=5
+[14:57:37] [lua] ocr boolean string
+[14:57:37] [lua] ocr_error ocrText: screen capture or OCR unavailable
+[14:57:37] [lua] DEVICE_SMOKE_V15_END
+[14:57:37] script finished: device_smoke_v15.at
+[14:57:39] command: run (device_smoke_v15.at)
+[14:57:39] [lua] DEVICE_SMOKE_V15_BEGIN
+[14:57:39] [lua] size 414.0 896.0
+[14:57:39] [lua] getColor boolean 16777215
+[14:57:40] OCR request=C197B15E-7014-418F-A013-E9AD6A3C8E64 process failed status=4 errno=0 reaped=1 exit=-1 signal=9
+[14:57:40] lua error (device_smoke_v15.at): [string "device_smoke_v15.at"]:5: STOP
+[14:57:43] command: run (device_smoke_v15.at)
+[14:57:43] [lua] DEVICE_SMOKE_V15_BEGIN
+[14:57:43] [lua] size 414.0 896.0
+[14:57:43] [lua] getColor boolean 16777215
+[14:57:43] [lua] ocr boolean table
+[14:57:43] [lua] ocr_count 9
+[14:57:43] [lua] ocr_line 2:57
+[14:57:43] [lua] ocr_line ATLite 它 日志口停止
+[14:57:43] [lua] ocr_line 电脑访问：http://192.168.2.127:8080
+[14:57:43] [lua] ocr_line 上传.at 脚本与png 搜图模板（同一 Wi-Fi)
+[14:57:43] [lua] ocr_line device_page_v15.at
+[14:57:43] [lua] ocr_line device_ smoke_ v15.at
+[14:57:43] [lua] ocr_line device_ stop_v15.at
+[14:57:43] [lua] ocr_line email roundtrip.at
+[14:57:43] [lua] ocr_line test.at
+[14:57:43] [lua] DEVICE_SMOKE_V15_END
+[14:57:43] script finished: device_smoke_v15.at
+

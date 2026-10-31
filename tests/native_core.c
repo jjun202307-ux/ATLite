@@ -10,6 +10,11 @@ int main(void) {
     assert(!ATValidUTF8Text((const unsigned char *)"\xed\xa0\x80",3));
     assert(!ATValidUTF8Text((const unsigned char *)"\xc0\x80",2));
     assert(!ATValidUTF8Text((const unsigned char *)"\xf0\x9f",2));
+    double dx=0,dy=0;
+    assert(ATPointToDigitizer(207,448,414,896,&dx,&dy) && dx==.5 && dy==.5);
+    assert(!ATPointToDigitizer(1,2,0,896,&dx,&dy));
+    assert(!ATPointToDigitizer(NAN,2,414,896,&dx,&dy));
+    assert(ATPointToDigitizer(-1,900,414,896,&dx,&dy) && dx==0 && dy==1);
     uint16_t usage=0; int shift=0;
     assert(ATASCIIKey('@',&usage,&shift) && usage==0x1f && shift==1);
     assert(ATASCIIKey('a',&usage,&shift) && usage==4 && shift==0);

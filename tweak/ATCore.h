@@ -59,40 +59,81 @@ static inline void *ATBudgetRealloc(ATMemoryBudget *b, void *ptr, size_t oldSize
     return p;
 }
 
+static inline int ATPointToDigitizer(double x,double y,double width,double height,double *outX,double *outY) {
+    if(!outX || !outY || !isfinite(x) || !isfinite(y) || !isfinite(width) || !isfinite(height) || width<=0 || height<=0)return 0;
+    *outX=fmax(0,fmin(1,x/width));*outY=fmax(0,fmin(1,y/height));return 1;
+}
+
 typedef int (*ATCoreCancel)(void *);
-/* 1 match, 0 no match/degenerate input, -1 cancelled. Full-resolution baseline. */
-static inline int ATCoreNCCBest(const uint8_t *hay, int hw, int hh,
-        const uint8_t *needle, int nw, int nh, double threshold,
-        int *outX, int *outY, double *outScore, ATCoreCancel cancel, void *context) {
-    if (!hay || !needle || nw < 2 || nh < 2 || hw < nw || hh < nh ||
-        !isfinite(threshold) || threshold < -1 || threshold > 1) return 0;
-    size_t count = (size_t)nw * (size_t)nh;
-    double mean = 0, variance = 0;
-    for (size_t i=0; i<count; i++) mean += needle[i];
-    mean /= (double)count;
-    for (size_t i=0; i<count; i++) { double d=needle[i]-mean; variance += d*d; }
-    if (variance < 1e-6) return 0;
-    double best = -2; int bx=-1, by=-1;
-    for (int y=0; y<=hh-nh; y++) {
-        for (int x=0; x<=hw-nw; x++) {
-            if (cancel && cancel(context)) return -1;
-            double sum=0, squares=0, numerator=0;
-            for (int j=0; j<nh; j++) {
-                if ((j & 31)==0 && cancel && cancel(context)) return -1;
-                const uint8_t *row=hay+(size_t)(y+j)*hw+x;
-                for (int i=0; i<nw; i++) {
-                    double v=row[i]; sum += v; squares += v*v;
-                    numerator += v*(needle[(size_t)j*nw+i]-mean);
-                }
-            }
-            double wvar=squares-sum*sum/(double)count;
-            if (wvar < 1e-6) continue;
-            double score=numerator/sqrt(variance*wvar);
-            if (score>best) { best=score; bx=x; by=y; }
+/* Exact NCC with summed-area statistics and a Cauchy-Schwarz block bound.
+ * The bound rejects only candidates mathematically unable to reach the cutoff;
+ * surviving positions still use every template pixel, including off-grid positions. */
+static inline double ATCoreRect(const double *table,int stride,int x,int y,int w,int h) {
+    return table[(size_t)(y+h)*stride+x+w]-table[(size_t)y*stride+x+w]
+         - table[(size_t)(y+h)*stride+x]+table[(size_t)y*stride+x];
+}
+static inline int ATCoreNCCBest(const uint8_t *hay,int hw,int hh,
+        const uint8_t *needle,int nw,int nh,double threshold,
+        int *outX,int *outY,double *outScore,ATCoreCancel cancel,void *context) {
+    if (!hay || !needle || !outX || !outY || !outScore || nw<2 || nh<2 || hw<nw || hh<nh ||
+        hw>8192 || hh>8192 || (size_t)hw*hh>16777216 || !isfinite(threshold) || threshold< -1 || threshold>1) return 0;
+    size_t count=(size_t)nw*nh;
+    double mean=0,variance=0;
+    for(size_t i=0;i<count;i++) mean+=needle[i];
+    mean/=count;
+    for(size_t i=0;i<count;i++){double d=needle[i]-mean;variance+=d*d;}
+    if(variance<1e-6) return 0;
+    int stride=hw+1;
+    size_t cells=(size_t)stride*(hh+1);
+    double *table=(double *)calloc(cells*2,sizeof(double));
+    if(!table)return -1;
+    double *squares=table+cells;
+    for(int y=0;y<hh;y++) {
+        if(cancel && cancel(context)){free(table);return -1;}
+        double sum=0,sq=0;
+        for(int x=0;x<hw;x++) {
+            double value=hay[(size_t)y*hw+x];sum+=value;sq+=value*value;
+            table[(size_t)(y+1)*stride+x+1]=table[(size_t)y*stride+x+1]+sum;
+            squares[(size_t)(y+1)*stride+x+1]=squares[(size_t)y*stride+x+1]+sq;
         }
     }
-    if (bx<0 || best<threshold) return 0;
-    *outX=bx; *outY=by; *outScore=fmin(1.0,best);
-    return 1;
+    int gx=nw<8?nw:8,gy=nh<8?nh:8,blocks=0;
+    int left[64],top[64],width[64],height[64];double size[64],tSum[64],projectedT=0;
+    for(int by=0;by<gy;by++)for(int bx=0;bx<gx;bx++) {
+        int k=blocks++;left[k]=bx*nw/gx;top[k]=by*nh/gy;
+        width[k]=(bx+1)*nw/gx-left[k];height[k]=(by+1)*nh/gy-top[k];
+        size[k]=(double)width[k]*height[k];tSum[k]=0;
+        for(int j=top[k];j<top[k]+height[k];j++)for(int i=left[k];i<left[k]+width[k];i++)tSum[k]+=needle[(size_t)j*nw+i]-mean;
+        projectedT+=tSum[k]*tSum[k]/size[k];
+    }
+    double residualT=fmax(0,variance-projectedT),best=-2;int bestX=-1,bestY=-1;
+    for(int y=0;y<=hh-nh;y++)for(int x=0;x<=hw-nw;x++) {
+        if((x&63)==0 && cancel && cancel(context)){free(table);return -1;}
+        double sum=ATCoreRect(table,stride,x,y,nw,nh);
+        double var=ATCoreRect(squares,stride,x,y,nw,nh)-sum*sum/count;
+        if(var<1e-6)continue;
+        double numerator=0,projectedH=0;
+        for(int k=0;k<blocks;k++) {
+            double block=ATCoreRect(table,stride,x+left[k],y+top[k],width[k],height[k]);
+            numerator+=block*tSum[k]/size[k];projectedH+=block*block/size[k];
+        }
+        projectedH-=sum*sum/count;
+        double denominator=sqrt(variance*var);
+        double upper=(numerator+sqrt(residualT*fmax(0,var-projectedH)))/denominator;
+        if(upper+1e-9<fmax(threshold,best))continue;
+        numerator=0;
+        for(int j=0;j<nh;j++) {
+            if((j&31)==0 && cancel && cancel(context)){free(table);return -1;}
+            const uint8_t *row=hay+(size_t)(y+j)*hw+x;
+            for(int i=0;i<nw;i++)numerator+=row[i]*(needle[(size_t)j*nw+i]-mean);
+        }
+        double score=numerator/denominator;
+        if(score>best){best=score;bestX=x;bestY=y;}
+        if(best>=1-1e-12)goto finished;
+    }
+finished:
+    free(table);
+    if(bestX<0 || best<threshold)return 0;
+    *outX=bestX;*outY=bestY;*outScore=fmin(1,best);return 1;
 }
 #endif

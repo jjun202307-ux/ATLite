@@ -57,3 +57,19 @@ OCR 在真正 SpringBoard 连续两次失败，日志为 CoreML `Error computing
 用户文档的原始TSDaemon样本SHA为00f0014d503e8df2002499d06fea8c61e5058bcad83f36b9f0a1b89053d7066e。只读解析其签名确认H11ANEInDirectPathClient声明；未执行商业程序。手机隔离工具仅增加该类授权，准确中英识别从CoreML错误变成功。再缩减为8个相关图形/ANE类，20次英文/中文/混合/revision2测试全部通过预期邮箱、atlas123用户名及相应中文文本内容。证据见verification/device-2026-10-31。
 
 G1已取得内容对照证据。下一步0.3.17仅为SSH内测开发包，增加按需OCR worker及有界父进程；在G2至G5通过前不作为正式交付。
+
+## 0.3.17 真机OCR与故障隔离结果
+
+实际屏幕解锁状态为0/亮屏。SpringBoard脚本读出ATLite界面中英文与脚本列表，OCR得到10行。使用临时备份与EXIT恢复保护替换本包的OCR子程序，分别注入30秒挂起、SIGTRAP和停止信号：超时约8秒后被SIGKILL且reaped=1；SIGTRAP记录signal=5且reaped=1；停止记录cancelled且reaped=1。恢复原worker后下一次OCR得到9行，状态为idle；进程列表无残留ATLOCRWorker。用户脚本与真实邮箱记录未改。
+
+G2已通过实际成功/超时/崩溃/取消/恢复，尚缺父进程重启时的孤儿退出测试，不能将G2全部勾选。G3测试页事件收集器的本机后台启动被自动审批策略拒绝；当前没有可靠页面事件回报，点击滑动和ASCII输入尚未通过。保留软件未完成状态，不发正式下载。
+
+## 用户指定的主屏两步测试
+
+相册IMG_0002.PNG为828×1792主屏图，裁剪Safari图标内区110×110作为模板。真实Lua调用Home键返回主屏成功（OCR含主屏App列表），findImage(模板,0.90)触发2秒计算预算，未定位，故不能执行搜图点击。随后findText("Settings")返回点坐标(62,367)；tap后OCR仍为主屏App列表，未打开设置，点击投递未通过。日志15:03:17至15:03:26，证据verification/device-2026-10-31/home-icon-ocr-test-result.txt。这是一套可重复失败基线，不以识别坐标存在宣称点击成功。
+
+## 主屏失败根因与0.3.18内部验证
+
+隔离HID工具：归一化坐标+从IORegistry取得当前AppleMultitouchDevice标识+正确父事件up状态，真实打开设置且OCR读到设置内容。仅归一化但无sender、仅sender但使用点坐标两组均仍在主屏，形成明确反例。正式代码同时修复路由坐标与动态sender，不硬编码本机ID。
+
+110×110 Safari图标全屏NCC旧路径超过12秒；保留精确全分辨率匹配，通过积分图统计与Cauchy-Schwarz分块上界安全剔除候选，同一夹具定位(645,380)、score=1，主机耗时0.108秒；100组随机小图与暴力NCC比对通过。手机修复后表现仍需构建安装复测，不预先宣称成功。

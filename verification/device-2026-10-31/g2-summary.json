@@ -1,0 +1,31 @@
+{
+  "build": "3fcf4d7acada29f9bf6666d1ce5ce3b211cc3850",
+  "version": "0.3.17",
+  "deb_sha256": "ff022b0ff5309bbb6cc3f08ba91d11ae1ccc60c79531e4198247d534f12809c7",
+  "actual_screen_ocr": {
+    "success": true,
+    "recognized": "电脑访问，上传脚本，脚本列表等中英文字"
+  },
+  "fault_injection": {
+    "timeout": {
+      "status": 3,
+      "reaped": true,
+      "signal": 9
+    },
+    "crash": {
+      "status": 7,
+      "reaped": true,
+      "signal": 5
+    },
+    "cancel": {
+      "status": 4,
+      "reaped": true,
+      "signal": 9
+    },
+    "recovery": true
+  },
+  "limitations": [
+    "orphan-parent restart lifecycle not yet tested",
+    "touch delivery, swipe, ASCII text, end-to-end email pending"
+  ]
+}

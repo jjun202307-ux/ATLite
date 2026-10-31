@@ -2,7 +2,7 @@
 #import "../shared/ATLJBRootPath.h"
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
-// ATLiteTweak v0.3.17 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.18 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -246,6 +246,9 @@ static IOHIDEventRef (*_AT_IOHIDEventCreateKeyboardEvent)(CFAllocatorRef, uint64
 
 static IOHIDEventSystemClientRef gHIDClient = nil;
 static BOOL gHIDReady = NO;
+static uint64_t gTouchSenderID=0;
+static void (*_AT_IOHIDEventSetSenderID)(IOHIDEventRef,uint64_t);
+static CGSize ATScreenSize(void);
 
 static void ATLoadHIDSymbols(void) {
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
@@ -258,6 +261,7 @@ static void ATLoadHIDSymbols(void) {
     ATSYM(_AT_IOHIDEventAppendEvent,                "IOHIDEventAppendEvent");
     ATSYM(_AT_IOHIDEventSetIntegerValue,            "IOHIDEventSetIntegerValue");
     ATSYM(_AT_IOHIDEventSetFloatValue,              "IOHIDEventSetFloatValue");
+    ATSYM(_AT_IOHIDEventSetSenderID, "IOHIDEventSetSenderID");
     ATSYM(_AT_IOHIDEventCreateKeyboardEvent,        "IOHIDEventCreateKeyboardEvent");
 #undef ATSYM
     if (!_AT_IOHIDEventSystemClientCreate || !_AT_IOHIDEventSystemClientDispatchEvent ||
@@ -267,6 +271,17 @@ static void ATLoadHIDSymbols(void) {
         ATLog(@"IOHIDEvent symbols incomplete, touch sim disabled");
         return;
     }
+    // Resolve the current device's digitizer identity; never reuse another phone's ID.
+    CFMutableDictionaryRef (*matching)(const char *)=(CFMutableDictionaryRef (*)(const char *))dlsym(iokit,"IOServiceMatching");
+    uint32_t (*getService)(uint32_t,CFDictionaryRef)=(uint32_t (*)(uint32_t,CFDictionaryRef))dlsym(iokit,"IOServiceGetMatchingService");
+    int (*registryID)(uint32_t,uint64_t *)=(int (*)(uint32_t,uint64_t *))dlsym(iokit,"IORegistryEntryGetRegistryEntryID");
+    int (*releaseService)(uint32_t)=(int (*)(uint32_t))dlsym(iokit,"IOObjectRelease");
+    if(matching && getService && registryID && releaseService && _AT_IOHIDEventSetSenderID) {
+        CFMutableDictionaryRef query=matching("AppleMultitouchDevice");
+        uint32_t service=query?getService(0,query):0;
+        if(service) { if(registryID(service,&gTouchSenderID))gTouchSenderID=0;releaseService(service); }
+    }
+    ATLog(@"digitizer sender=%llu",(unsigned long long)gTouchSenderID);
     gHIDClient = _AT_IOHIDEventSystemClientCreate(kCFAllocatorDefault);
     gHIDReady = (gHIDClient != nil);
     ATLog(@"IOHIDEvent ready: %@ (keyboard: %@)",
@@ -329,8 +344,11 @@ static BOOL gASCIIKeys[256];
 //   hand（父）：index=0 identity=0 x/y/z=0 压力=0 mask=Touch range=0 touch=true
 //   finger（子）：index 从 1 起（finger+1）、identity=2、mask 动态、tipPressure=0
 static void ATSimulateTouch(int action, int finger, float x, float y) {
-    if (!gHIDReady) return;
+    if (!gHIDReady || !gTouchSenderID || !_AT_IOHIDEventSetSenderID) return;
     if (finger < 0 || finger >= 10 || !isfinite(x) || !isfinite(y)) return;
+    CGSize screen=ATScreenSize();
+    if(screen.width<=0 || screen.height<=0) { ATLog(@"touch failed: screen size unavailable");return; }
+    float originalX=x,originalY=y;
     ATThrottleEvents();
     uint64_t ts = ATTimestampNow();
     BOOL isUp = (action == 2);
@@ -349,22 +367,25 @@ static void ATSimulateTouch(int action, int finger, float x, float y) {
     float minor = 2.5f + (float)arc4random_uniform(201) / 100.0f;
     if (minor > major) minor = major;
 
+    double digitizerX=0,digitizerY=0;
+    if(!ATPointToDigitizer(x,y,screen.width,screen.height,&digitizerX,&digitizerY))return;
     IOHIDEventRef hand = _AT_IOHIDEventCreateDigitizerEvent(
         kCFAllocatorDefault, ts, kIOHIDDigitizerTransducerTypeHand,
         0, 0, kIOHIDDigitizerEventTouch, 0,
-        0, 0, 0, 0, 0, 0, true, 0);
+        0, 0, 0, 0, 0, touching, touching, 0);
     IOHIDEventRef fg = _AT_IOHIDEventCreateDigitizerFingerEvent(
         kCFAllocatorDefault, ts,
         (uint32_t)(finger + 1), 2, mask,
-        x, y, 0, 0, 0, touching, touching, 0);
+        digitizerX, digitizerY, 0, 0, 0, touching, touching, 0);
     if (!hand || !fg) { if (hand) CFRelease(hand); if (fg) CFRelease(fg); return; }
     _AT_IOHIDEventAppendEvent(hand, fg, 0);
     _AT_IOHIDEventSetIntegerValue(hand, AT_FIELD_IS_DISPLAY_INTEGRATED, 1);
     _AT_IOHIDEventSetIntegerValue(fg,   AT_FIELD_IS_DISPLAY_INTEGRATED, 1);
     _AT_IOHIDEventSetFloatValue(fg, AT_FIELD_MAJOR_RADIUS, major);
     _AT_IOHIDEventSetFloatValue(fg, AT_FIELD_MINOR_RADIUS, minor);
+    _AT_IOHIDEventSetSenderID(hand,gTouchSenderID);
     _AT_IOHIDEventSystemClientDispatchEvent(gHIDClient, hand);
-    gTouches[finger] = (ATTouchState){ !isUp, x, y };
+    gTouches[finger] = (ATTouchState){ !isUp, originalX, originalY };
     CFRelease(hand);
     CFRelease(fg);
 }
@@ -1132,7 +1153,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.17 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.18 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1622,7 +1643,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.17 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.18 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }
