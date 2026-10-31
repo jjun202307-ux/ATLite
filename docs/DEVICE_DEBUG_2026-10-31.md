@@ -47,3 +47,7 @@ Windows 已有 OpenSSH 客户端和鹰眼中控 baise2 窗口。自动化工具�
 OCR 在真正 SpringBoard 连续两次失败，日志为 CoreML `Error computing NN outputs`。独立 SSH 测试工具以已知 PNG 测试准确/快速、默认/CPU 路径，但该进程出现 CVPixelBuffer 分配错误，因此不能将该工具的结果当作 SpringBoard CPU 路径结果。下一步 0.3.16 只修改识别请求为 CPU，作为需真机验证的单变量实验，不能提前宣称修复。
 
 手机 Safari 已通过局域网载入电脑上的本地测试页，页面加载回报已收到。脚本 tap 命令执行完成，但尚未收到页面 pointer/input 回报，故点击与输入仍未证明送达。
+
+## 当前结论更新
+
+以 RESEARCH_DEVICE_FAILURES_2026-10-31.md 为最新事实汇总：当前设备实际系统16.4，0.3.16 CPU实验失败且手机已退回0.3.15。用户要求扩大研究、先写计划；生产代码冻结。新计划位于superpowers/plans/2026-10-31-atlite-device-stability.md。此前“待安装0.3.15”等描述是历史进度，已由后续真机证据取代。

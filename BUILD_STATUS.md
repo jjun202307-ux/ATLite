@@ -1,13 +1,13 @@
-# ATLite 0.3.15 调试构建状态
+# ATLite 当前真机与构建状态
 
-2026-10-31：macOS CI 构建成功，64 项测试（无跳过）、131 项静态检查、29 项 deb 检查通过。
+更新：2026-10-31。当前手机实际安装并加载 0.3.15；0.3.16 CPU 实验失败后已撤回安装。当前任务按用户要求冻结生产代码，先完成专项研究和实施计划。
 
-构建提交：3510205ec7016b79a5018785a5fc319bb1b9c68c。CI：https://github.com/jjun202307-ux/ATLite/actions/runs/41194326827
+设备 baise2：iPhone 11；rootfs 系统文件、内核与独立进程崩溃报告显示 iOS 16.4（20E247），与用户此前提供的16.6不同；两项来源并列记录，不能混写为16.6已实测。
 
-deb SHA-256：b2cbafdd27ac7f95db684927e333b56aa8579dd2eb175504f677d4ed6f63d68b。
+已通过：真实 SpringBoard 加载、根目录识别、日志创建、Lua 运行结束、读到828×1792帧/取色数值、pcall(stop)合作停止。未通过：准确OCR；CPU实验有阻塞/ANE析构异常；点击/滑动/邮箱输入尚未有目标事件回报；完整邮箱往返未验收；重启后存在旧running状态残留。
 
-已 SSH 登录 iPhone 11 / iOS 16.6，确认原安装 0.3.14。手机隔离测试进程已复现原插件因不识别 canonical TweakInject 路径而禁用；0.3.15 补齐解析与 libroot 显式加载，并修复诊断目录创建和错误注入提示。
+0.3.15 构建提交3510205ec7016b79a5018785a5fc319bb1b9c68c，CI64项测试；0.3.16实验构建2c2c045ceaf7726f4b74433146e7463193ab1cdd，CI66项测试。两者静态/产物检查通过不等于整机通过。0.3.16不是正式交付包，当前Git源码HEAD仍含实验，实施前须对照0.3.15基线。
 
-修复包已上传手机 /var/mobile/ATLite_0.3.15_iphoneos-arm64e.deb，尚未安装；当前 mobile SSH 无 sudo 免密权限，root 公钥未配置。待管理员安装与重启桌面后继续测试真正 SpringBoard 的加载、脚本、抓屏取色、OCR、点击滑动与邮箱往返。不能把本记录视为整机验收通过。
+研究：docs/RESEARCH_DEVICE_FAILURES_2026-10-31.md。计划：docs/superpowers/plans/2026-10-31-atlite-device-stability.md。先验证环境/权限与准确中英识别，再决定是否使用按需退出的OCR小进程。禁止静默用英文快速识别冒充中文能力。
 
-0.3.13/0.3.14 变更及两次截图详见 docs/DEVICE_DEBUG_2026-10-31.md；历史源代码快照保留。
+A/B daemon未实现；HTTP仍依赖App前台。尚不能宣称软件已经改好或没有问题。
