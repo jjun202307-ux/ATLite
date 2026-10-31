@@ -15,6 +15,15 @@ int main(void) {
     assert(!ATPointToDigitizer(1,2,0,896,&dx,&dy));
     assert(!ATPointToDigitizer(NAN,2,414,896,&dx,&dy));
     assert(ATPointToDigitizer(-1,900,414,896,&dx,&dy) && dx==0 && dy==1);
+    int rx=0,ry=0,rw=0,rh=0;
+    assert(ATCorePointRegion(10.25,20.25,40.5,50.5,2,828,1792,&rx,&ry,&rw,&rh));
+    assert(rx==20 && ry==40 && rw==82 && rh==102);
+    assert(!ATCorePointRegion(-1,0,5,5,2,828,1792,&rx,&ry,&rw,&rh));
+    assert(!ATCorePointRegion(0,0,415,1,2,828,1792,&rx,&ry,&rw,&rh));
+    assert(!ATCorePointRegion(0,0,1,0,2,828,1792,&rx,&ry,&rw,&rh));
+    assert(!ATCorePointRegion(NAN,0,1,1,2,828,1792,&rx,&ry,&rw,&rh));
+    assert(ATCorePointRegion(0,0,414,896,2,828,1792,&rx,&ry,&rw,&rh));
+    assert(rx==0 && ry==0 && rw==828 && rh==1792);
     uint16_t usage=0; int shift=0;
     assert(ATASCIIKey('@',&usage,&shift) && usage==0x1f && shift==1);
     assert(ATASCIIKey('a',&usage,&shift) && usage==4 && shift==0);
@@ -38,6 +47,11 @@ int main(void) {
     int x=-1,y=-1,stop=0;double score=0;
     assert(ATCoreNCCBest(hay,64,64,needle,16,16,.99,&x,&y,&score,cancelled,&stop)==1);
     assert(x==1 && y==1 && score>.99999);
+    for(int yy=0;yy<16;yy++) for(int xx=0;xx<16;xx++) hay[(yy+31)*64+xx+30]=needle[yy*16+xx];
+    uint8_t crop[30*30];
+    for(int yy=0;yy<30;yy++) memcpy(crop+yy*30,hay+(yy+20)*64+20,30);
+    assert(ATCoreNCCBest(crop,30,30,needle,16,16,.99,&x,&y,&score,cancelled,&stop)==1);
+    assert(x+20==30 && y+20==31 && score>.99999);
     stop=1;
     assert(ATCoreNCCBest(hay,64,64,needle,16,16,.99,&x,&y,&score,cancelled,&stop)==-1);
     uint8_t small[4]={0,255,128,64};

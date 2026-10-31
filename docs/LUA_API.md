@@ -37,3 +37,5 @@ inputText 的 US HID 布局、App 焦点和屏幕输入效果必须真机确认�
 Lua库白名单：base/table/string/math/utf8；不开放 os/io/debug/package/coroutine/load/loadfile/dofile。Extensions.lua升为v3，旧版备份.bak后替换。
 
 findColors/appRun/appKill/vibrate/openURL/toast仍是旧占位，返回nil并记日志；本轮不增加无关功能。
+
+开发版0.3.19支持可选区域：`findImage("button.png", 0.90, {x=0,y=400,width=414,height=150})`。区域使用屏幕点坐标、必须完全位于屏幕内；结果中心仍为全屏点坐标。未指定区域时保持原行为。区域超时、越界和截图错误要分别处理；该功能仍需真机验证。

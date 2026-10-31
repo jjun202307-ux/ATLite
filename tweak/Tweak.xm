@@ -2,7 +2,7 @@
 #import "../shared/ATLJBRootPath.h"
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
-// ATLiteTweak v0.3.18 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.19 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -699,6 +699,18 @@ static BOOL ATRGBAToGray(const ATBitmap *src, ATGray *dst) {
     return YES;
 }
 
+static BOOL ATRGBAToGrayRegion(const ATBitmap *src, ATGray *dst, int x0, int y0, int w, int h) {
+    if (!src || !src->rgba || x0<0 || y0<0 || w<=0 || h<=0 || x0>src->w-w || y0>src->h-h) return NO;
+    dst->w=w; dst->h=h; dst->g=(uint8_t *)malloc((size_t)w*h);
+    if (!dst->g) return NO;
+    for (int y=0; y<h; y++) {
+        const uint8_t *row=src->rgba + ((size_t)(y0+y)*src->w+x0)*4;
+        uint8_t *out=dst->g+(size_t)y*w;
+        for (int x=0; x<w; x++) out[x]=ATLuma(row+x*4);
+    }
+    return YES;
+}
+
 typedef struct { double deadline; BOOL interrupted; unsigned checks; } ATSearchContext;
 static int ATSearchCancelled(void *opaque) {
     ATSearchContext *context = (ATSearchContext *)opaque;
@@ -928,26 +940,40 @@ static int l_findColor(lua_State *L) {
     return 1;
 }
 
-// findImage("button.png"[, similarity]) → { {x, y, score}, ... }（中心点）
+// findImage("button.png"[, similarity[, {x,y,width,height}]]) → { {x, y, score}, ... }（点坐标）
 static int l_findImage(lua_State *L) {
     const char *name = luaL_checkstring(L, 1);
     double sim = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : 0.9;
     if (!isfinite(sim) || sim < 0 || sim > 1) return luaL_error(L, "findImage: similarity must be finite in [0,1]");
+    BOOL hasRegion = !lua_isnoneornil(L,3);
+    double region[4] = {0};
+    if (hasRegion) {
+        luaL_checktype(L,3,LUA_TTABLE);
+        const char *names[4]={"x","y","width","height"};
+        for (int i=0;i<4;i++) { lua_getfield(L,3,names[i]);region[i]=luaL_checknumber(L,-1);lua_pop(L,1); }
+    }
     ATBitmap tmpl = {0};
     if (!ATLoadTemplate(name, &tmpl)) { ATLog(@"findImage: template not found: %s", name); lua_pushnil(L); return 1; }
     ATBitmap screen = {0};
     if (!ATCaptureScreen(&screen)) { ATFreeBitmap(&tmpl); lua_pushnil(L); return 1; }
     double ptScale = ATCaptureScale(&screen); // 释放前取（像素→点）
+    int originX=0,originY=0,regionW=screen.w,regionH=screen.h;
+    if (hasRegion && !ATCorePointRegion(region[0],region[1],region[2],region[3],ptScale,
+                                        screen.w,screen.h,&originX,&originY,&regionW,&regionH)) {
+        ATFreeBitmap(&screen); ATFreeBitmap(&tmpl);
+        return luaL_error(L,"findImage: region must fit the screen and have positive size");
+    }
     ATGray screenGray = {0};
-    BOOL haveGray = ATRGBAToGray(&screen, &screenGray);
+    BOOL haveGray = hasRegion ? ATRGBAToGrayRegion(&screen,&screenGray,originX,originY,regionW,regionH)
+                              : ATRGBAToGray(&screen, &screenGray);
     ATFreeBitmap(&screen);
     if (!haveGray) { ATFreeBitmap(&tmpl); lua_pushnil(L); return 1; }
 
     int x = 0, y = 0; double score = 0;
     BOOL interrupted = NO;
     BOOL found = ATFindImageInScreen(&screenGray, &tmpl, sim, &x, &y, &score, &interrupted);
-    double centerX = (x + tmpl.w / 2.0) / ptScale;
-    double centerY = (y + tmpl.h / 2.0) / ptScale;
+    double centerX = (originX + x + tmpl.w / 2.0) / ptScale;
+    double centerY = (originY + y + tmpl.h / 2.0) / ptScale;
     ATFreeGray(&screenGray);
     ATFreeBitmap(&tmpl);
     ATCheckScript(L);
@@ -1153,7 +1179,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.18 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.19 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1643,7 +1669,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.18 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.19 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

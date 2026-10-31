@@ -64,6 +64,18 @@ static inline int ATPointToDigitizer(double x,double y,double width,double heigh
     *outX=fmax(0,fmin(1,x/width));*outY=fmax(0,fmin(1,y/height));return 1;
 }
 
+/* Convert an in-screen point rectangle into an inclusive/exclusive pixel crop. */
+static inline int ATCorePointRegion(double x,double y,double width,double height,double scale,int sw,int sh,
+                                    int *outX,int *outY,int *outW,int *outH) {
+    if(!outX || !outY || !outW || !outH || !isfinite(x) || !isfinite(y) ||
+       !isfinite(width) || !isfinite(height) || !isfinite(scale) || scale<=0 ||
+       x<0 || y<0 || width<=0 || height<=0 || sw<=0 || sh<=0 || sw>8192 || sh>8192 ||
+       !isfinite(x+width) || !isfinite(y+height) || (x+width)*scale>sw || (y+height)*scale>sh) return 0;
+    double left=floor(x*scale),top=floor(y*scale),right=ceil((x+width)*scale),bottom=ceil((y+height)*scale);
+    if(left<0 || top<0 || right>sw || bottom>sh || right<=left || bottom<=top) return 0;
+    *outX=(int)left;*outY=(int)top;*outW=(int)(right-left);*outH=(int)(bottom-top);return 1;
+}
+
 typedef int (*ATCoreCancel)(void *);
 /* Exact NCC with summed-area statistics and a Cauchy-Schwarz block bound.
  * The bound rejects only candidates mathematically unable to reach the cutoff;
