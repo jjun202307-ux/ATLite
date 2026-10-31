@@ -1,6 +1,8 @@
 #import "../shared/ATLStopFile.h"
 #import "../shared/ATLJBRootPath.h"
-// ATLiteTweak v0.3.16 — AutoTouch-style script runner (Dopamine roothide only)
+#import "../shared/ATLChildProcess.h"
+#import "../shared/ATLOCRReply.h"
+// ATLiteTweak v0.3.17 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -941,46 +943,63 @@ static int l_findImage(lua_State *L) {
 }
 
 // OCR results are staged in fixed native storage. No native bitmap survives Lua allocation.
-typedef struct { char text[512]; double x, y, width, height, confidence; } ATTextLine;
-typedef struct { int count; ATTextLine lines[64]; } ATTextResult;
+static BOOL gOCRWorkerBroken=NO;
+static int ATLOCRCancelled(void *context) {
+    (void)context;
+    return ATShouldStop() || ATScriptExpired();
+}
 static BOOL ATRecognizeScreen(ATTextResult *out) {
-    ATBitmap bitmap = {0}; CGImageRef image = NULL; BOOL ok = NO;
+    if (gOCRWorkerBroken) { ATLog(@"OCR disabled after unconfirmed child reap; respring required");return NO; }
+    ATBitmap bitmap={0};CGImageRef image=NULL;CGImageDestinationRef destination=NULL;
+    int inputFD=-1;BOOL ok=NO;
     @try {
         @autoreleasepool {
             if (!ATCaptureScreen(&bitmap)) return NO;
-            image = ATCreateCGImageFromBitmap(&bitmap);
+            image=ATCreateCGImageFromBitmap(&bitmap);
             if (!image) return NO;
-            double scale = ATCaptureScale(&bitmap);
-            VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc]
-                initWithCompletionHandler:^(VNRequest *req, NSError *error) {
-                    if (error) return;
-                    for (VNRecognizedText *observation in req.results) {
-                        if (out->count >= 64) break;
-                        VNRecognizedText *candidate = [observation topCandidates:1].firstObject;
-                        NSString *text = [candidate string];
-                        if (!text.length) continue;
-                        ATTextLine *line = &out->lines[out->count];
-                        if (![text getCString:line->text maxLength:sizeof(line->text) encoding:NSUTF8StringEncoding]) continue;
-                        CGRect box = observation.boundingBox;
-                        line->x = box.origin.x * bitmap.w / scale;
-                        line->y = (1-box.origin.y-box.size.height) * bitmap.h / scale;
-                        line->width = box.size.width * bitmap.w / scale;
-                        line->height = box.size.height * bitmap.h / scale;
-                        line->confidence = [candidate confidence];
-                        out->count++;
-                    }
-                }];
-            request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-            request.recognitionLanguages = @[@"zh-Hans", @"en-US"];
-            request.usesLanguageCorrection = NO;
-            // SpringBoard OCR uses CPU to avoid the failing accelerated CoreML path.
-            request.usesCPUOnly = YES;
-            VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
-            NSError *error = nil;
-            ok = [handler performRequests:@[request] error:&error];
-            if (!ok) ATLog(@"OCR failed: %@", error);
+            double scale=ATCaptureScale(&bitmap);
+            NSMutableData *png=[NSMutableData data];
+            destination=CGImageDestinationCreateWithData((__bridge CFMutableDataRef)png,CFSTR("public.png"),1,NULL);
+            if (!destination) return NO;
+            CGImageDestinationAddImage(destination,image,NULL);
+            if (!CGImageDestinationFinalize(destination) || !png.length || png.length>ATL_OCR_INPUT_LIMIT) {
+                ATLog(@"OCR input PNG serialization failed or exceeded limit");return NO;
+            }
+            NSString *pattern=[ATBaseDir() stringByAppendingPathComponent:@"ocr-input-XXXXXX"];
+            char *temporary=strdup(pattern.fileSystemRepresentation);
+            if (!temporary) return NO;
+            inputFD=mkstemp(temporary);
+            if (inputFD>=0 && unlink(temporary)) { close(inputFD);inputFD=-1; }
+            free(temporary);
+            if (inputFD<0) { ATLog(@"OCR temporary input failed errno=%d",errno);return NO; }
+            if (fcntl(inputFD,F_SETFD,FD_CLOEXEC)<0) return NO;
+            NSUInteger written=0;
+            while (written<png.length) {
+                if (ATLOCRCancelled(NULL)) return NO;
+                ssize_t n=write(inputFD,(const char *)png.bytes+written,png.length-written);
+                if (n<0 && errno==EINTR) continue;
+                if (n<=0) return NO;
+                written+=(NSUInteger)n;
+            }
+            if (lseek(inputFD,0,SEEK_SET)<0) return NO;
+            NSString *requestID=NSUUID.UUID.UUIDString;
+            NSString *exe=[ATJBRoot() stringByAppendingPathComponent:@"Applications/ATLite.app/ATLOCRWorker"];
+            NSMutableData *output=[NSMutableData dataWithLength:ATL_OCR_OUTPUT_LIMIT];
+            ATLChildResult child=ATLRunChild(exe.fileSystemRepresentation,requestID.UTF8String,inputFD,
+                (char *)output.mutableBytes,output.length,ATL_OCR_TIMEOUT,ATLOCRCancelled,NULL);
+            if (child.status!=ATL_CHILD_OK) {
+                if (child.status==ATL_CHILD_REAP_FAILED) gOCRWorkerBroken=YES;
+                ATLog(@"OCR request=%@ process failed status=%d errno=%d reaped=%d exit=%d signal=%d",requestID,child.status,child.systemError,child.reaped,child.exitCode,child.signal);
+                return NO;
+            }
+            output.length=child.length;
+            NSString *error=nil;
+            ok=ATLDecodeOCRReply(output,requestID,bitmap.w,bitmap.h,scale,out,&error);
+            if (!ok) ATLog(@"OCR request=%@ failed: %@",requestID,error);
         }
     } @finally {
+        if (inputFD>=0) close(inputFD);
+        if (destination) CFRelease(destination);
         if (image) CGImageRelease(image);
         ATFreeBitmap(&bitmap);
     }
@@ -1113,7 +1132,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.16 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.17 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1603,7 +1622,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.16 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.17 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

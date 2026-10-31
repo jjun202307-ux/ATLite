@@ -1,0 +1,202 @@
+[
+  {
+    "case": "g1-english-1",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "FAZ: MaF"
+    ],
+    "header": "g1-english-1 mode=0 language=english exit=0 timeout=0 ticks=4"
+  },
+  {
+    "case": "g1-english-2",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "FAZ: MaF"
+    ],
+    "header": "g1-english-2 mode=0 language=english exit=0 timeout=0 ticks=4"
+  },
+  {
+    "case": "g1-english-3",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "FAZ: MaF"
+    ],
+    "header": "g1-english-3 mode=0 language=english exit=0 timeout=0 ticks=4"
+  },
+  {
+    "case": "g1-english-4",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "FAZ: MaF"
+    ],
+    "header": "g1-english-4 mode=0 language=english exit=0 timeout=0 ticks=4"
+  },
+  {
+    "case": "g1-english-5",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "FAZ: MaF"
+    ],
+    "header": "g1-english-5 mode=0 language=english exit=0 timeout=0 ticks=4"
+  },
+  {
+    "case": "g1-chinese-1",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-chinese-1 mode=0 language=chinese exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-chinese-2",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-chinese-2 mode=0 language=chinese exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-chinese-3",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-chinese-3 mode=0 language=chinese exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-chinese-4",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-chinese-4 mode=0 language=chinese exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-chinese-5",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-chinese-5 mode=0 language=chinese exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-mixed-1",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-mixed-1 mode=0 language=mixed exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-mixed-2",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-mixed-2 mode=0 language=mixed exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-mixed-3",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-mixed-3 mode=0 language=mixed exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-mixed-4",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-mixed-4 mode=0 language=mixed exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-mixed-5",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Emai: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-mixed-5 mode=0 language=mixed exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-revision2-1",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-revision2-1 mode=4 language=mixed exit=0 timeout=0 ticks=3"
+  },
+  {
+    "case": "g1-revision2-2",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-revision2-2 mode=4 language=mixed exit=0 timeout=0 ticks=2"
+  },
+  {
+    "case": "g1-revision2-3",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-revision2-3 mode=4 language=mixed exit=0 timeout=0 ticks=2"
+  },
+  {
+    "case": "g1-revision2-4",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-revision2-4 mode=4 language=mixed exit=0 timeout=0 ticks=2"
+  },
+  {
+    "case": "g1-revision2-5",
+    "passed": true,
+    "texts": [
+      "Username: atlas123",
+      "Email: test@example.invalid",
+      "用户名：测试用户"
+    ],
+    "header": "g1-revision2-5 mode=4 language=mixed exit=0 timeout=0 ticks=2"
+  }
+]

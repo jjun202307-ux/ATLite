@@ -1,0 +1,32 @@
+{
+  "source_document": "C:\\Users\\jjun\\WorkBuddy\\2026-10-25-16-27-59\\iOS自动化脚本平台-完全技术分析.md",
+  "sample_sha256": "00f0014d503e8df2002499d06fea8c61e5058bcad83f36b9f0a1b89053d7066e",
+  "relevant_observed_iokit_classes": [
+    "H11ANEInDirectPathClient",
+    "AGXCommandQueue",
+    "AGXDevice",
+    "AGXDeviceUserClient",
+    "AGXSharedUserClient",
+    "AppleCredentialManagerUserClient",
+    "AppleJPEGDriverUserClient",
+    "ApplePPMUserClient",
+    "AppleSPUHIDDeviceUserClient",
+    "AppleSPUHIDDriverUserClient",
+    "IOAccelContext",
+    "IOAccelContext2",
+    "IOAccelDevice",
+    "IOAccelDevice2",
+    "IOAccelSharedUserClient",
+    "IOAccelSharedUserClient2",
+    "IOAccelSubmitter2",
+    "IOHIDEventServiceFastPathUserClient",
+    "IOHIDLibUserClient",
+    "IOMobileFramebufferUserClient",
+    "IOReportUserClient",
+    "IOSurfaceAcceleratorClient",
+    "IOSurfaceRootUserClient",
+    "RootDomainUserClient"
+  ],
+  "method": "Read-only Mach-O embedded signature parsing. Vendor binary was not executed.",
+  "trial": "Only adding H11ANEInDirectPathClient to existing graphical class permissions changed default accurate OCR from failure to success. Reduced eight-class set passed 20 language/revision cases."
+}

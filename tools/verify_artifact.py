@@ -115,11 +115,12 @@ def main(deb_path):
     files = {x.name.lstrip("./"): x for x in dt.getmembers() if x.isfile()}
     for executable, kind in [('Applications/ATLite.app/ATLite', 2),
                              ('Applications/ATLite.app/ATLiteProbe', 2),
+                             ('Applications/ATLite.app/ATLOCRWorker', 2),
                              ('Library/MobileSubstrate/DynamicLibraries/ATLiteTweak.dylib', 6)]:
         member = files.get(executable)
         check('executable present: ' + executable, member is not None and bool(member.mode & 0o111))
-        if member and executable.endswith('/ATLiteProbe'):
-            check('probe archive mode has no setuid/setgid', not member.mode & 0o6000)
+        if member and executable.endswith(('/ATLiteProbe','/ATLOCRWorker')):
+            check('tool archive mode has no setuid/setgid: ' + executable, not member.mode & 0o6000)
         if member:
             try:
                 slices = macho_slices(dt.extractfile(member).read())
@@ -130,6 +131,8 @@ def main(deb_path):
                 if kind == 6:
                     check('SpringBoard tweak uses iOS14+ arm64e ABI',
                           any(modern_arm64e(s) for s in slices))
+                if executable.endswith('/ATLOCRWorker'):
+                    check('OCR worker contains device-verified ANE access', all('H11ANEInDirectPathClient' in s['entitlements'].get('com.apple.security.iokit-user-client-class',[]) for s in slices))
                 if kind == 2:
                     need = ['platform-application', 'com.apple.private.security.no-sandbox']
                     if executable.endswith('/ATLite'):

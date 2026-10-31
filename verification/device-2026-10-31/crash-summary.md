@@ -1,0 +1,1 @@
+失败CPU实验：EXC_BREAKPOINT/SIGTRAP，libdispatch报告信号量仍在使用时析构；栈包含AppleNeuralEngine模型清理。原始崩溃报告仅保留在本地work，避免导出设备标识。加入经对照验证的ANE访问类别后，默认准确识别中英均成功；生产中不再使用CPU实验。

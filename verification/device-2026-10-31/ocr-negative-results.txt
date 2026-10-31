@@ -1,0 +1,21 @@
+Killed: 9
+negative_timeout child_exit=137 ticks=80
+invalid_image_exit=1
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=0 error=Error Domain=com.apple.vis Code=13 "CRImage Reader Detector was given zero-dimensioned image (0 x 0)" UserInfo={NSLocalizedDescription=CRImage Reader Detector was given zero-dimensioned image (0 x 0)}
+

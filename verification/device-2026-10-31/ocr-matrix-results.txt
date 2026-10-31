@@ -1,0 +1,411 @@
+
+CASE=g1-english-1 mode=0 language=english exit=0 timeout=0 ticks=4
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=FAZ: MaF
+
+CASE=g1-english-2 mode=0 language=english exit=0 timeout=0 ticks=4
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=FAZ: MaF
+
+CASE=g1-english-3 mode=0 language=english exit=0 timeout=0 ticks=4
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=FAZ: MaF
+
+CASE=g1-english-4 mode=0 language=english exit=0 timeout=0 ticks=4
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=FAZ: MaF
+
+CASE=g1-english-5 mode=0 language=english exit=0 timeout=0 ticks=4
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=FAZ: MaF
+
+CASE=g1-chinese-1 mode=0 language=chinese exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-chinese-2 mode=0 language=chinese exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-chinese-3 mode=0 language=chinese exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-chinese-4 mode=0 language=chinese exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-chinese-5 mode=0 language=chinese exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-mixed-1 mode=0 language=mixed exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-mixed-2 mode=0 language=mixed exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-mixed-3 mode=0 language=mixed exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-mixed-4 mode=0 language=mixed exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-mixed-5 mode=0 language=mixed exit=0 timeout=0 ticks=3
+revision=3 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant",
+    "yue-Hans",
+    "yue-Hant",
+    "ko-KR",
+    "ja-JP",
+    "ru-RU",
+    "uk-UA"
+)
+cpu=0 ok=1 error=none
+text=Username: atlas123
+text=Emai: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-revision2-1 mode=4 language=mixed exit=0 timeout=0 ticks=3
+revision=2 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant"
+)
+cpu=4 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-revision2-2 mode=4 language=mixed exit=0 timeout=0 ticks=2
+revision=2 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant"
+)
+cpu=4 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-revision2-3 mode=4 language=mixed exit=0 timeout=0 ticks=2
+revision=2 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant"
+)
+cpu=4 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-revision2-4 mode=4 language=mixed exit=0 timeout=0 ticks=2
+revision=2 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant"
+)
+cpu=4 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=用户名：测试用户
+
+CASE=g1-revision2-5 mode=4 language=mixed exit=0 timeout=0 ticks=2
+revision=2 supported=(
+    "en-US",
+    "fr-FR",
+    "it-IT",
+    "de-DE",
+    "es-ES",
+    "pt-BR",
+    "zh-Hans",
+    "zh-Hant"
+)
+cpu=4 ok=1 error=none
+text=Username: atlas123
+text=Email: test@example.invalid
+text=用户名：测试用户
+

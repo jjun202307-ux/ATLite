@@ -51,3 +51,9 @@ OCR 在真正 SpringBoard 连续两次失败，日志为 CoreML `Error computing
 ## 当前结论更新
 
 以 RESEARCH_DEVICE_FAILURES_2026-10-31.md 为最新事实汇总：当前设备实际系统16.4，0.3.16 CPU实验失败且手机已退回0.3.15。用户要求扩大研究、先写计划；生产代码冻结。新计划位于superpowers/plans/2026-10-31-atlite-device-stability.md。此前“待安装0.3.15”等描述是历史进度，已由后续真机证据取代。
+
+## 用户提供技术分析后的补证
+
+用户文档的原始TSDaemon样本SHA为00f0014d503e8df2002499d06fea8c61e5058bcad83f36b9f0a1b89053d7066e。只读解析其签名确认H11ANEInDirectPathClient声明；未执行商业程序。手机隔离工具仅增加该类授权，准确中英识别从CoreML错误变成功。再缩减为8个相关图形/ANE类，20次英文/中文/混合/revision2测试全部通过预期邮箱、atlas123用户名及相应中文文本内容。证据见verification/device-2026-10-31。
+
+G1已取得内容对照证据。下一步0.3.17仅为SSH内测开发包，增加按需OCR worker及有界父进程；在G2至G5通过前不作为正式交付。
