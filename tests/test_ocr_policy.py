@@ -62,7 +62,7 @@ enum { VNRequestTextRecognitionLevelAccurate=0 };
 - (BOOL)performRequests:(NSArray*)requests error:(NSError**)error {
  calls++;VNRecognizeTextRequest *r=requests.firstObject;
  NSCAssert(r.usesCPUOnly && !r.usesLanguageCorrection,@"CPU policy and literal email text");
- NSCAssert([r.recognitionLanguages isEqual:@[@"zh-Hans",@"en-US"]],@"languages preserved");
+ NSCAssert(([r.recognitionLanguages isEqual:@[@"zh-Hans",@"en-US"]]),@"languages preserved");
  if(fail) { *error=[NSError errorWithDomain:@"test" code:1 userInfo:nil];return NO; }
  VNRecognizedText *t=[VNRecognizedText new];t.string=@"Username: ATLiteDebug";t.boundingBox=CGRectMake(.1,.2,.4,.3);t.confidence=.9;r.results=@[t];r.completion(r,nil);return YES;
 }
