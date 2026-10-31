@@ -13,6 +13,10 @@ int main(void) { @autoreleasepool {
  NSData *(^encode)(void)=^{return [NSJSONSerialization dataWithJSONObject:reply options:0 error:nil];};
  NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"valid reply");
  NSCAssert(result.count==1 && fabs(result.lines[0].x-41.4)<.001 && !strcmp(result.lines[0].text,"用户名：测试用户"),@"point conversion and UTF8");
+ reply[@"lines"]=@[@{@"text":@"fixture",@"x":@(-0.0004650982105789553),@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}];
+ NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error) && result.lines[0].x==0,@"clip one-pixel Vision edge overshoot");
+ reply[@"lines"]=@[@{@"text":@"fixture",@"x":@(-2.0/828.0),@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}];
+ NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"reject over one pixel outside");
  NSCAssert(!ATLDecodeOCRReply(encode(),@"old",828,1792,2,&result,&error),@"reject other request");
  reply[@"lines"]=@[@{@"text":@"bad",@"x":@"0.1",@"y":@0,@"width":@1,@"height":@1,@"confidence":@1}];
  NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"reject numeric strings");

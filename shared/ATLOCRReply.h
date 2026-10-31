@@ -4,6 +4,7 @@
 #include <math.h>
 #include <string.h>
 #include "ATLOCRProtocol.h"
+#include "ATLOCRGeometry.h"
 typedef struct { char text[512]; double x,y,width,height,confidence; } ATTextLine;
 typedef struct { int count; ATTextLine lines[64]; } ATTextResult;
 static inline BOOL ATLOCRReplyError(NSString **error, NSString *message) {
@@ -38,11 +39,11 @@ static inline BOOL ATLDecodeOCRReply(NSData *data, NSString *requestID,
         double values[5];NSUInteger i=0;
         for (NSString *key in @[@"x",@"y",@"width",@"height",@"confidence"]) {
             id value=item[key];
-            if (![value isKindOfClass:NSNumber.class] || !isfinite([value doubleValue]) || [value doubleValue]<0 || [value doubleValue]>1)
+            if (![value isKindOfClass:NSNumber.class] || !isfinite([value doubleValue]))
                 return ATLOCRReplyError(error,@"Invalid OCR numeric result");
             values[i++]=[value doubleValue];
         }
-        if (values[0]+values[2]>1.000001 || values[1]+values[3]>1.000001)
+        if (values[4]<0 || values[4]>1 || !ATLNormalizeOCRBox(&values[0],&values[1],&values[2],&values[3],w,h))
             return ATLOCRReplyError(error,@"OCR box outside frame");
         ATTextLine *line=&parsed.lines[parsed.count];
         if (![text getCString:line->text maxLength:sizeof(line->text) encoding:NSUTF8StringEncoding])

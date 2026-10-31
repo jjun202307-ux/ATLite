@@ -1,9 +1,22 @@
 #include "ATCore.h"
+#include "../shared/ATLOCRGeometry.h"
 #include <assert.h>
 #include <stdio.h>
 
 static int cancelled(void *context) { return *(int *)context; }
 int main(void) {
+    double ox=-0.0004650982105789553,oy=.1,ow=.2,oh=.1;
+    assert(ATLNormalizeOCRBox(&ox,&oy,&ow,&oh,828,1792));
+    assert(ox==0 && fabs(ow-(.2-.0004650982105789553))<1e-10);
+    ox=-2.0/828;oy=.1;ow=.2;oh=.1;
+    assert(!ATLNormalizeOCRBox(&ox,&oy,&ow,&oh,828,1792));
+    ox=.9;oy=.1;ow=.5;oh=.1;
+    assert(!ATLNormalizeOCRBox(&ox,&oy,&ow,&oh,828,1792));
+    ox=.9;oy=.1;ow=.1+0.5/828;oh=.1;
+    assert(ATLNormalizeOCRBox(&ox,&oy,&ow,&oh,828,1792));
+    assert(fabs(ox+ow-1)<1e-10);
+    ox=.1;oy=NAN;ow=.2;oh=.1;
+    assert(!ATLNormalizeOCRBox(&ox,&oy,&ow,&oh,828,1792));
     assert(ATValidUTF8Text((const unsigned char *)"abc@example.com",15));
     assert(ATValidUTF8Text((const unsigned char *)"\xe7\x94\xa8\xe6\x88\xb7",6));
     assert(!ATValidUTF8Text((const unsigned char *)"a\0b",3));

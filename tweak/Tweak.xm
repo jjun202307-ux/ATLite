@@ -2,7 +2,7 @@
 #import "../shared/ATLJBRootPath.h"
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
-// ATLiteTweak v0.3.19 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.20 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -1179,7 +1179,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.19 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.20 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1669,7 +1669,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.19 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.20 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }
