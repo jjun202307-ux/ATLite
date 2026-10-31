@@ -33,7 +33,7 @@
 
 ### 尚未证明
 
-- 缺少 ANE IOKit 类访问是不是准确 OCR 的直接根因；尚未做最小权限前后对照。
+- 早期未证实的 ANE 类权限假设已由后续同机单变量对照支持，详见第9节；其他模型/资源因素不再作为已证实根因。
 - 模型/资源路径是否受 roothide 的 rootfs/jbroot 视角影响；尚未证明模型文件损坏。
 - Safari 已加载本地测试页，但脚本 tap 后没有收到 pointer/input 回报。坐标、路由、前台状态均需单独验证，不能直接说某一项是唯一根因。
 - ASCII 邮箱是否进入输入框、滑动是否发生、中文识别与邮箱完整往返均未通过。
@@ -94,3 +94,15 @@
 ## 8. 检索工具记录
 
 使用 Agent Reach 1.5.0 的 Exa/Jina 后端，并用网页检索核对原始出处；gh CLI 未安装，未为本任务安装新客户端。体检提示 Agent Reach 1.6.0 可用，本轮未升级工具。工具升级说明不属于 ATLite 修复范围。
+
+## 9. 用户提供完整技术分析后的新证据
+
+参考文档：用户提供的《iOS自动化脚本平台-完全技术分析.md》。有帮助的部分是原始样本路径与哈希、独立TSDaemon/Vision模块、SenderID符号和证据边界。其“事件与真实手指不可区分”等推断没有被本轮继承；价格、云OCR、加密容器与当前轻量修复无关。
+
+原文把entitlements列为未解析项。本轮使用现有Mach-O签名解析器，只读检查TSDaemon（SHA256：00f0014d503e8df2002499d06fea8c61e5058bcad83f36b9f0a1b89053d7066e）和model.so，确认H11ANEInDirectPathClient在授权列表内；未执行或集成商业程序。签名元数据能在本机解析，无需先安装macOS。
+
+在相同隔离工具、图片、mobile用户和识别配置下，仅给原有图形授权添加H11ANEInDirectPathClient：准确识别从CoreML失败变为中英文成功。因此这项缺失是已验证的关键运行条件，不再泛归因为Vision系统bug。只保留IOSurfaceRoot与H11两个类仍失败，保留8个相关图形/ANE类则成功；称为“已验证的缩减集合”，不宣称已证明数学意义最小。
+
+随后默认准确识别按英文/中文/混合各5次、revision2混合5次，共20/20次通过预期用户名atlas123、邮箱test@example.invalid和相应中文文本检查。PNG SHA256：34d030eec482a4f6ba7701ef42d313a4a91ebcdc7f9c2d0b045ac9c35591c27d。首次ATLiteDebug样例被识别成ATLite Debug，已如实保留而未在脚本里偷偷拼接文字；正式夹具用明确的atlas123检查。证据见verification/device-2026-10-31。
+
+当前SpringBoard原签名缺少该ANE类。不会重新签名或修改Apple系统进程；按计划采用独立的小型OCR worker承载所需签名，并由父进程有界管理。0.3.17为内部验证版本，不代表G2至G5已通过。

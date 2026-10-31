@@ -92,7 +92,13 @@ int main(int argc,char **argv) {
             // Default accelerated request; CPU-only failed on the actual device.
             request.usesCPUOnly=NO;
             NSError *error=nil;
-            NSArray *supported=[request supportedRecognitionLanguagesAndReturnError:&error];
+            NSArray *supported=nil;
+            if (@available(iOS 15.0, macOS 12.0, *)) {
+                supported=[request supportedRecognitionLanguagesAndReturnError:&error];
+            } else {
+                supported=[VNRecognizeTextRequest supportedRecognitionLanguagesForTextRecognitionLevel:request.recognitionLevel
+                    revision:request.revision error:&error];
+            }
             if (!supported || ![supported containsObject:@"zh-Hans"] || ![supported containsObject:@"en-US"])
                 return ATLReply(requestID,NO,nil,@"LANGUAGE_UNSUPPORTED",error.localizedDescription ?: @"Accurate Chinese/English unavailable");
             VNImageRequestHandler *handler=[[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
