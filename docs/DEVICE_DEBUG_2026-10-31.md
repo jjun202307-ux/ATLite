@@ -37,3 +37,13 @@ Windows 已有 OpenSSH 客户端和鹰眼中控 baise2 窗口。自动化工具�
 已通过调试公钥以 mobile 登录 192.168.2.127:2223；dpkg 确认安装 0.3.14。DynamicLibraries 是指向 /usr/lib/TweakInject 的符号链接。以手机原有 ATLiteProbe 建立隔离 RootCheck.app 测试进程（bundle ID 为 com.apple.springboard），加载原插件，真实输出 `[ATLite] current jailbreak root unavailable; tweak disabled`。不涉及替换真正的 SpringBoard。dyld 记录插件实际路径为 `<jbroot>/usr/lib/TweakInject/ATLiteTweak.dylib`，现有解析只认 MobileSubstrate 旧路径；在 libroot 的 @rpath 查找失败且无 /var/jb 时提前禁用。
 
 修复中的 0.3.15：识别两种实际插件路径，已取得物理根时用其显式加载 libroot；App 诊断保存前创建父目录，正确显示保存失败；日志页不再凭目录存在性断言注入。路径解析新增真实 C 编译执行测试。尚未构建/安装 0.3.15，真正 SpringBoard 与完整功能待验。
+
+0.3.15 构建成功：64 项 macOS 测试无跳过、131 项静态检查、29 项产物检查通过。已传手机 /var/mobile/ATLite_0.3.15_iphoneos-arm64e.deb，尚待管理员安装；root SSH 尚未授权。
+
+## 0.3.15 已安装后的真机测试
+
+已确认真正 SpringBoard PID 6723 载入 v0.3.15，根目录来源 libroot；日志目录自动创建。SSH 发出运行通知后，Lua 取得 414×896 点尺寸和 828×1792 BGRA 帧，getColor(20,20) 返回数值 687818；脚本正常结束。pcall(stop) 测试触发 STOP，未到达后续哨兵，状态恢复空闲。
+
+OCR 在真正 SpringBoard 连续两次失败，日志为 CoreML `Error computing NN outputs`。独立 SSH 测试工具以已知 PNG 测试准确/快速、默认/CPU 路径，但该进程出现 CVPixelBuffer 分配错误，因此不能将该工具的结果当作 SpringBoard CPU 路径结果。下一步 0.3.16 只修改识别请求为 CPU，作为需真机验证的单变量实验，不能提前宣称修复。
+
+手机 Safari 已通过局域网载入电脑上的本地测试页，页面加载回报已收到。脚本 tap 命令执行完成，但尚未收到页面 pointer/input 回报，故点击与输入仍未证明送达。
