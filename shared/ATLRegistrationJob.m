@@ -1,4 +1,5 @@
 #import "ATLRegistrationJob.h"
+#import <dispatch/dispatch.h>
 #import "ATLRegistrationStorage.h"
 
 static void ATLRegError(NSError **error, NSInteger code, NSString *message) {
@@ -6,16 +7,20 @@ static void ATLRegError(NSError **error, NSInteger code, NSString *message) {
 }
 static BOOL ATLRegText(id value,NSUInteger max,NSString *pattern) {
  if(![value isKindOfClass:NSString.class] || ![value length] || [value length]>max) return NO;
- return [[NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil] numberOfMatchesInString:value options:0 range:NSMakeRange(0,[value length])]==1;
+ NSRegularExpression *regex=[NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];
+ NSTextCheckingResult *match=[regex firstMatchInString:value options:0 range:NSMakeRange(0,[value length])];
+ return match && match.range.location==0 && match.range.length==[value length];
 }
 static BOOL ATLRegValidPayload(NSDictionary *p) {
  if(![p isKindOfClass:NSDictionary.class] || p.count!=6) return NO;
+ static NSSet *zipcodes;static dispatch_once_t once;
+ dispatch_once(&once,^{zipcodes=[NSSet setWithArray:@[@"02203",@"90012",@"93309",@"93721",@"94612",@"95821",@"92101",@"95113",@"70808",@"71105",@"12207",@"11714",@"10461",@"11201",@"14202",@"11373",@"11742",@"10027",@"14604",@"10601"]];});
  return ATLRegText(p[@"id"],80,@"^[A-Za-z0-9-]+$") &&
   ATLRegText(p[@"email"],254,@"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$") &&
   ATLRegText(p[@"username"],64,@"^[A-Za-z0-9_.-]+$") &&
   ATLRegText(p[@"password"],254,@"^[\\x20-\\x7e]+$") &&
   ATLRegText(p[@"fullName"],100,@"^[A-Za-z]+ [A-Za-z]+$") &&
-  ATLRegText(p[@"zip"],5,@"^[0-9]{5}$");
+  ATLRegText(p[@"zip"],5,@"^[0-9]{5}$") && [zipcodes containsObject:p[@"zip"]];
 }
 static NSString *ATLRegName(ATLRegState s) {
  switch(s){case ATL_REG_PENDING:return @"pending";case ATL_REG_PREPARING:return @"preparing";case ATL_REG_READY:return @"ready";case ATL_REG_SUBMITTING:return @"submitting";case ATL_REG_WAIT_CODE:return @"wait_code";case ATL_REG_DONE:return @"done";case ATL_REG_ERROR:return @"error";case ATL_REG_REVIEW:return @"review";}
