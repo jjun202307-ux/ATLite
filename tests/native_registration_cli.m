@@ -16,6 +16,10 @@ int main(void) { @autoreleasepool {
  NSData *code=[@"{\"id\":\"cli-1\",\"code\":\"001234\"}" dataUsingEncoding:NSUTF8StringEncoding];assert(ATLRegistrationCLI(dir,@"code",code,&out)==0);response=[[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];assert(![response containsString:@"001234"]);
  assert(ATLRegistrationClaimCode(dir,&error));assert(ATLRegistrationAdvance(dir,@"cli-1",ATL_REG_INTERRUPTED,&error));
  NSData *numeric=[@"{\"id\":\"cli-1\",\"confirmed\":1}" dataUsingEncoding:NSUTF8StringEncoding];assert(ATLRegistrationCLI(dir,@"clear",numeric,&out)!=0);
- NSData *clear=[@"{\"id\":\"cli-1\",\"confirmed\":true}" dataUsingEncoding:NSUTF8StringEncoding];assert(ATLRegistrationCLI(dir,@"clear",clear,&out)==0);assert(ATLRegistrationCLI(dir,@"status",query,&out)!=0);
+ assert(ATLRegistrationCLI(dir,@"resume",numeric,&out)!=0);
+ NSData *clear=[@"{\"id\":\"cli-1\",\"confirmed\":true}" dataUsingEncoding:NSUTF8StringEncoding];
+ assert(ATLRegistrationCLI(dir,@"resume",clear,&out)==0);assert(ATLRegistrationCLI(dir,@"clear",clear,&out)!=0);
+ assert(ATLRegistrationSetCode(dir,@"cli-1",@"001234",&error));assert(ATLRegistrationClaimCode(dir,&error));assert(ATLRegistrationAdvance(dir,@"cli-1",ATL_REG_INTERRUPTED,&error));
+ assert(ATLRegistrationCLI(dir,@"clear",clear,&out)==0);assert(ATLRegistrationCLI(dir,@"status",query,&out)!=0);
  NSFileManager *fm=NSFileManager.defaultManager;[fm removeItemAtPath:[dir stringByAppendingPathComponent:@"registration-job.json"] error:nil];[fm removeItemAtPath:[dir stringByAppendingPathComponent:@"registration-job.lock"] error:nil];[fm removeItemAtPath:dir error:nil];return 0;
 } }

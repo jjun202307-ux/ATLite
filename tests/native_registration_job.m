@@ -40,7 +40,10 @@ int main(void) { @autoreleasepool {
  e=nil;assert(ATLRegistrationClear(base,@"test-1",&e));
  e=nil;assert(ATLRegistrationCreate(base,payload,&e));assert(ATLRegistrationClaimPending(base,&e));
  e=nil;assert(ATLRegistrationRecover(base,&e));public=ATLRegistrationStatus(base,@"test-1",&e);assert([public[@"state"] isEqual:@"review"] && !public[@"password"]);
- e=nil;assert(ATLRegistrationClear(base,@"test-1",&e));
+ e=nil;assert(!ATLRegistrationResumeVerification(base,@"wrong",&e) && e.code==409);
+ e=nil;assert(ATLRegistrationResumeVerification(base,@"test-1",&e));public=ATLRegistrationStatus(base,@"test-1",&e);assert([public[@"state"] isEqual:@"wait_code"]);
+ e=nil;assert(!ATLRegistrationResumeVerification(base,@"test-1",&e) && e.code==409);
+ e=nil;assert(ATLRegistrationAdvance(base,@"test-1",ATL_REG_INTERRUPTED,&e));assert(ATLRegistrationClear(base,@"test-1",&e));
  [[NSFileManager defaultManager] removeItemAtPath:job error:nil];[[NSFileManager defaultManager] removeItemAtPath:[base stringByAppendingPathComponent:@"registration-job.lock"] error:nil];[[NSFileManager defaultManager] removeItemAtPath:base error:nil];
  return 0;
 } }

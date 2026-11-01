@@ -8,13 +8,14 @@ typedef enum {
 typedef enum {
     ATL_REG_CLAIM, ATL_REG_FIELDS_READY, ATL_REG_BEGIN_SUBMIT,
     ATL_REG_VERIFICATION_SEEN, ATL_REG_SUCCESS_CONFIRMED, ATL_REG_INTERRUPTED,
-    ATL_REG_FAILED, ATL_REG_CODE_STAGED, ATL_REG_CLAIM_CODE
+    ATL_REG_FAILED, ATL_REG_CODE_STAGED, ATL_REG_CLAIM_CODE, ATL_REG_RESUME_VERIFICATION
 } ATLRegEvent;
 
 /* Pure transition table. Persistence and side effects must happen under the
    caller's lock. SUBMITTING must be durable before dispatching any tap. */
 static inline int ATLRegStep(ATLRegState state, ATLRegEvent event, ATLRegState *next) {
     if (!next) return 0;
+    if (state == ATL_REG_REVIEW && event == ATL_REG_RESUME_VERIFICATION) { *next = ATL_REG_WAIT_CODE; return 1; }
     if (event == ATL_REG_INTERRUPTED && (state == ATL_REG_PREPARING || state == ATL_REG_READY || state == ATL_REG_SUBMITTING || state == ATL_REG_WAIT_CODE || state == ATL_REG_CODE_READY || state == ATL_REG_ENTERING_CODE)) {
         *next = ATL_REG_REVIEW; return 1;
     }

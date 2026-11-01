@@ -85,7 +85,7 @@ NSDictionary *ATLRegistrationClaim(NSString *directory,NSString *jobID,NSError *
 }
 NSDictionary *ATLRegistrationClaimPending(NSString *directory,NSError **error){return ATLRegClaim(directory,nil,error);}
 BOOL ATLRegistrationAdvance(NSString *directory,NSString *jobID,ATLRegEvent event,NSError **error){
- if(error)*error=nil;if(event==ATL_REG_CLAIM || event==ATL_REG_CODE_STAGED || event==ATL_REG_CLAIM_CODE){ATLRegError(error,400,@"请通过领取接口操作");return NO;}ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
+ if(error)*error=nil;if(event==ATL_REG_CLAIM || event==ATL_REG_CODE_STAGED || event==ATL_REG_CLAIM_CODE || event==ATL_REG_RESUME_VERIFICATION){ATLRegError(error,400,@"请通过领取接口操作");return NO;}ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
  @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state,next;
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,event,&next)){ATLRegError(error,409,@"任务阶段不允许此操作");return NO;}
   job[@"state"]=ATLRegName(next);
@@ -130,5 +130,13 @@ BOOL ATLRegistrationRecover(NSString *directory,NSError **error){
   if(!ATLRegStep(state,ATL_REG_INTERRUPTED,&next)){ATLRegError(error,500,@"任务恢复失败");return NO;}
   job[@"state"]=ATLRegName(next);for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip",@"code"]) [job removeObjectForKey:key];
   return ATLRegSave(&store,job,error);
+ } @finally {ATLRegClose(&store);}
+}
+
+BOOL ATLRegistrationResumeVerification(NSString *directory,NSString *jobID,NSError **error){
+ if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
+ @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state,next;
+  if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,ATL_REG_RESUME_VERIFICATION,&next)){ATLRegError(error,409,@"任务不在待核对状态");return NO;}
+  job[@"state"]=ATLRegName(next);return ATLRegSave(&store,job,error);
  } @finally {ATLRegClose(&store);}
 }

@@ -9,3 +9,4 @@ FOUNDATION_EXPORT BOOL ATLRegistrationClear(NSString *directory, NSString *jobID
 FOUNDATION_EXPORT BOOL ATLRegistrationSetCode(NSString *directory, NSString *jobID, NSString *code, NSError **error);
 FOUNDATION_EXPORT NSDictionary *ATLRegistrationClaimCode(NSString *directory, NSError **error);
 FOUNDATION_EXPORT BOOL ATLRegistrationRecover(NSString *directory, NSError **error);
+FOUNDATION_EXPORT BOOL ATLRegistrationResumeVerification(NSString *directory, NSString *jobID, NSError **error);

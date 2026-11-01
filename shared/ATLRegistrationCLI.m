@@ -15,6 +15,9 @@ int ATLRegistrationCLI(NSString *directory,NSString *operation,NSData *input,NSD
   else if([operation isEqual:@"code"] && [request count]==2 && [request[@"id"] isKindOfClass:NSString.class] && [request[@"code"] isKindOfClass:NSString.class]) {
    if(ATLRegistrationSetCode(directory,request[@"id"],request[@"code"],&error)) result=@{@"state":@"code_ready"};
   }
+  else if([operation isEqual:@"resume"] && [request count]==2 && [request[@"id"] isKindOfClass:NSString.class] && (request[@"confirmed"] && CFGetTypeID((__bridge CFTypeRef)request[@"confirmed"])==CFBooleanGetTypeID() && [request[@"confirmed"] boolValue])) {
+   if(ATLRegistrationResumeVerification(directory,request[@"id"],&error)) result=@{@"state":@"wait_code"};
+  }
   else if([operation isEqual:@"clear"] && [request count]==2 && [request[@"id"] isKindOfClass:NSString.class] && (request[@"confirmed"] && CFGetTypeID((__bridge CFTypeRef)request[@"confirmed"])==CFBooleanGetTypeID() && [request[@"confirmed"] boolValue])) {
    if(ATLRegistrationClear(directory,request[@"id"],&error)) result=@{@"state":@"cleared"};
   } else result=@{@"error":@"请求无效",@"code":@400};
