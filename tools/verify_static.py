@@ -265,8 +265,8 @@ def main(root):
     check("R23-E23 不再自建table盖状态行", "[[UITableView alloc]" not in vc_code)
 
     # V: 版本三处同步
-    check("V 版本0.3.23三处同步",
-          "Version: 0.3.23" in ctrl and "<string>0.3.23</string>" in plist_raw and "v0.3.23" in tweak)
+    check("V 版本0.3.24三处同步",
+          "Version: 0.3.24" in ctrl and "<string>0.3.24</string>" in plist_raw and "v0.3.24" in tweak)
 
     # ---- R32: 阶段 0 探针包 v0.3.10（A/B 双模式可行性验证 P1-P5）----
     # 注意：本文件的 read() 是双参数 read(root, rel)；tweak 变量已在 main() 中定义

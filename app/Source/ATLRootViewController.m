@@ -10,7 +10,7 @@
 // Locate the system Files app's on-device storage by container identifier,
 // rather than baking a device-specific container UUID into the application.
 static NSString *ATLFilesDirectory(void) {
-    NSString *root = @"/rootfs/var/mobile/Containers/Shared/AppGroup";
+    for (NSString *root in @[@"/var/mobile/Containers/Shared/AppGroup", @"/rootfs/var/mobile/Containers/Shared/AppGroup"]) {
     NSArray<NSString *> *entries = [NSFileManager.defaultManager contentsOfDirectoryAtPath:root error:nil];
     NSString *result = nil;
     for (NSString *entry in entries) {
@@ -22,7 +22,9 @@ static NSString *ATLFilesDirectory(void) {
         if (![NSFileManager.defaultManager fileExistsAtPath:storage isDirectory:&directory] || !directory || result) return nil;
         result = [storage stringByAppendingPathComponent:@"ATLite"];
     }
-    return result;
+    if (result) return result;
+    }
+    return nil;
 }
 
 // 手机本地文件入口；这些文件不会通过上传服务公开。
