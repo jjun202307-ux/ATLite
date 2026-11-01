@@ -10,6 +10,9 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifndef ATL_REG_FSYNC
+#define ATL_REG_FSYNC fsync
+#endif
 #define ATL_REG_MAX_BYTES 16384u
 typedef struct { int dirfd; int lockfd; } ATLRegStore;
 static inline void ATLRegClose(ATLRegStore *s) {
@@ -59,10 +62,10 @@ static inline int ATLRegWrite(ATLRegStore *s,const void *data,size_t length,cons
  if(fd<0) return 0;
  int ok=ATLRegPrivateFile(fd);size_t done=0;
  while(ok && done<length) { ssize_t n=write(fd,(const char *)data+done,length-done);if(n<0 && errno==EINTR) continue;if(n<=0){ok=0;break;}done+=(size_t)n; }
- if(ok && fsync(fd)!=0) ok=0;
+ if(ok && ATL_REG_FSYNC(fd)!=0) ok=0;
  if(close(fd)!=0) ok=0;
  if(!ok) { unlinkat(s->dirfd,temp,0);return 0; }
  if(renameat(s->dirfd,temp,s->dirfd,"registration-job.json")!=0) { unlinkat(s->dirfd,temp,0);return 0; }
- return fsync(s->dirfd)==0 ? 1 : -1;
+ return ATL_REG_FSYNC(s->dirfd)==0 ? 1 : -1;
 }
 #endif

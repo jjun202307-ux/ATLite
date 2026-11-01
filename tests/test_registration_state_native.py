@@ -7,6 +7,8 @@ class RegistrationStateTests(unittest.TestCase):
   self.compile_and_run('native_reg_state.c')
  def test_private_atomic_storage(self):
   self.compile_and_run('native_reg_storage.c')
+ def test_interrupted_atomic_write(self):
+  self.compile_and_run('native_reg_storage_fault.c')
  def compile_and_run(self,source):
   cc=os.environ.get('ATL_CC') or shutil.which('cc') or shutil.which('clang')
   if not cc:self.skipTest('C compiler required')
