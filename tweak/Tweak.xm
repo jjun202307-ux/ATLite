@@ -1758,6 +1758,11 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             [fm createDirectoryAtPath:dir withIntermediateDirectories:YES
                            attributes:@{NSFilePosixPermissions: @0755} error:nil];
         }
+        BOOL registrationDirectory=NO;
+        if ([fm fileExistsAtPath:ATRegistrationDir() isDirectory:&registrationDirectory] && registrationDirectory) {
+            NSError *recoveryError=nil;
+            if(!ATLRegistrationRecover(ATRegistrationDir(),&recoveryError)) ATLog(@"registration recovery unavailable");
+        }
         ATEnsureLuaLibraries();
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
                                         ATDarwinCallback, (__bridge CFStringRef)AT_DARWIN_NOTIFY,

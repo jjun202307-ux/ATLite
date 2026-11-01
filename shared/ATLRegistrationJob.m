@@ -120,3 +120,15 @@ NSDictionary *ATLRegistrationClaimCode(NSString *directory,NSError **error){
   return ATLRegSave(&store,job,error)?result:nil;
  } @finally {ATLRegClose(&store);}
 }
+
+BOOL ATLRegistrationRecover(NSString *directory,NSError **error){
+ if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
+ @try {NSError *readError=nil;NSMutableDictionary *job=ATLRegLoad(&store,&readError);
+  if(!job){if(readError.code==404)return YES;if(error)*error=readError;return NO;}
+  ATLRegState state,next;if(!ATLRegStateForName(job[@"state"],&state)){ATLRegError(error,500,@"任务状态无效");return NO;}
+  if(!(state==ATL_REG_PREPARING || state==ATL_REG_READY || state==ATL_REG_SUBMITTING || state==ATL_REG_CODE_READY || state==ATL_REG_ENTERING_CODE))return YES;
+  if(!ATLRegStep(state,ATL_REG_INTERRUPTED,&next)){ATLRegError(error,500,@"任务恢复失败");return NO;}
+  job[@"state"]=ATLRegName(next);for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip",@"code"]) [job removeObjectForKey:key];
+  return ATLRegSave(&store,job,error);
+ } @finally {ATLRegClose(&store);}
+}

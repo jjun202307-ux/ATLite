@@ -15,7 +15,7 @@ typedef enum {
    caller's lock. SUBMITTING must be durable before dispatching any tap. */
 static inline int ATLRegStep(ATLRegState state, ATLRegEvent event, ATLRegState *next) {
     if (!next) return 0;
-    if (event == ATL_REG_INTERRUPTED && (state == ATL_REG_PREPARING || state == ATL_REG_READY || state == ATL_REG_SUBMITTING || state == ATL_REG_WAIT_CODE || state == ATL_REG_ENTERING_CODE)) {
+    if (event == ATL_REG_INTERRUPTED && (state == ATL_REG_PREPARING || state == ATL_REG_READY || state == ATL_REG_SUBMITTING || state == ATL_REG_WAIT_CODE || state == ATL_REG_CODE_READY || state == ATL_REG_ENTERING_CODE)) {
         *next = ATL_REG_REVIEW; return 1;
     }
     if (event == ATL_REG_FAILED && (state == ATL_REG_PREPARING || state == ATL_REG_READY)) {
