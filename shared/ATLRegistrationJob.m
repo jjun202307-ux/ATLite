@@ -28,7 +28,7 @@ static BOOL ATLRegValidPayload(NSDictionary *p) {
   ATLRegText(p[@"zip"],5,@"^[0-9]{5}$") && [zipcodes containsObject:p[@"zip"]];
 }
 static NSString *ATLRegName(ATLRegState s) {
- switch(s){case ATL_REG_PENDING:return @"pending";case ATL_REG_PREPARING:return @"preparing";case ATL_REG_READY:return @"ready";case ATL_REG_SUBMITTING:return @"submitting";case ATL_REG_WAIT_CODE:return @"wait_code";case ATL_REG_DONE:return @"done";case ATL_REG_ERROR:return @"error";case ATL_REG_REVIEW:return @"review";}
+ switch(s){case ATL_REG_PENDING:return @"pending";case ATL_REG_PREPARING:return @"preparing";case ATL_REG_READY:return @"ready";case ATL_REG_SUBMITTING:return @"submitting";case ATL_REG_WAIT_CODE:return @"wait_code";case ATL_REG_CODE_READY:return @"code_ready";case ATL_REG_ENTERING_CODE:return @"entering_code";case ATL_REG_DONE:return @"done";case ATL_REG_ERROR:return @"error";case ATL_REG_REVIEW:return @"review";}
  return nil;
 }
 static BOOL ATLRegStateForName(id name,ATLRegState *out) {
@@ -85,12 +85,12 @@ NSDictionary *ATLRegistrationClaim(NSString *directory,NSString *jobID,NSError *
 }
 NSDictionary *ATLRegistrationClaimPending(NSString *directory,NSError **error){return ATLRegClaim(directory,nil,error);}
 BOOL ATLRegistrationAdvance(NSString *directory,NSString *jobID,ATLRegEvent event,NSError **error){
- if(error)*error=nil;if(event==ATL_REG_CLAIM){ATLRegError(error,400,@"请通过领取接口操作");return NO;}ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
+ if(error)*error=nil;if(event==ATL_REG_CLAIM || event==ATL_REG_CODE_STAGED || event==ATL_REG_CLAIM_CODE){ATLRegError(error,400,@"请通过领取接口操作");return NO;}ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
  @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state,next;
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,event,&next)){ATLRegError(error,409,@"任务阶段不允许此操作");return NO;}
   job[@"state"]=ATLRegName(next);
   if(next==ATL_REG_REVIEW || next==ATL_REG_ERROR || next==ATL_REG_DONE || next==ATL_REG_WAIT_CODE)
-   for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip"]) [job removeObjectForKey:key];
+   for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip",@"code"]) [job removeObjectForKey:key];
   return ATLRegSave(&store,job,error);
  } @finally {ATLRegClose(&store);}
 }
@@ -100,5 +100,23 @@ BOOL ATLRegistrationClear(NSString *directory,NSString *jobID,NSError **error){
  @try {NSDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state;
   if(!ATLRegStateForName(job[@"state"],&state) || !(state==ATL_REG_DONE || state==ATL_REG_ERROR || state==ATL_REG_REVIEW)){ATLRegError(error,409,@"任务仍在运行，不能清除");return NO;}
   if(ATLRegRemove(&store)!=1){ATLRegError(error,500,@"清除结果未确认，请核对");return NO;}return YES;
+ } @finally {ATLRegClose(&store);}
+}
+
+BOOL ATLRegistrationSetCode(NSString *directory,NSString *jobID,NSString *code,NSError **error){
+ if(error)*error=nil;if(!ATLRegText(code,6,@"^(?:[0-9]{4}|[0-9]{6})$")){ATLRegError(error,400,@"验证码格式无效");return NO;}
+ ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
+ @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state,next;
+  if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,ATL_REG_CODE_STAGED,&next)){ATLRegError(error,409,@"任务不等待验证码");return NO;}
+  job[@"state"]=ATLRegName(next);job[@"code"]=code;return ATLRegSave(&store,job,error);
+ } @finally {ATLRegClose(&store);}
+}
+NSDictionary *ATLRegistrationClaimCode(NSString *directory,NSError **error){
+ if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return nil;
+ @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job)return nil;ATLRegState state,next;
+  if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,ATL_REG_CLAIM_CODE,&next)){ATLRegError(error,409,@"验证码不能重复领取");return nil;}
+  NSString *code=job[@"code"];if(!ATLRegText(code,6,@"^(?:[0-9]{4}|[0-9]{6})$")){ATLRegError(error,500,@"验证码记录无效");return nil;}
+  NSDictionary *result=@{@"id":job[@"id"],@"code":code};[job removeObjectForKey:@"code"];job[@"state"]=ATLRegName(next);
+  return ATLRegSave(&store,job,error)?result:nil;
  } @finally {ATLRegClose(&store);}
 }

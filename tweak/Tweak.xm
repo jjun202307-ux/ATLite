@@ -1105,10 +1105,14 @@ static int l_inputText(lua_State *L) {
     }
     lua_pushboolean(L,1); return 1; // dispatched, not a guarantee that a field had focus
 }
-static char gRegistrationID[81], gRegistrationPassword[255];
+static char gRegistrationID[81], gRegistrationPassword[255], gRegistrationCode[7];
 static void ATClearRegistrationSecret(void) {
     volatile unsigned char *p=(volatile unsigned char *)gRegistrationPassword;
     for(size_t i=0;i<sizeof(gRegistrationPassword);i++) p[i]=0;
+}
+static void ATClearRegistrationCode(void) {
+    volatile unsigned char *p=(volatile unsigned char *)gRegistrationCode;
+    for(size_t i=0;i<sizeof(gRegistrationCode);i++) p[i]=0;
 }
 static NSString *ATRegistrationDir(void) {
     NSString *base=ATBaseDir();return base.length ? [base stringByAppendingPathComponent:@"Registration"] : nil;
@@ -1152,19 +1156,39 @@ static int l_inputRegistrationPassword(lua_State *L) {
     }
     ATClearRegistrationSecret();lua_pushboolean(L,1);return 1;
 }
+static int l_inputRegistrationCode(lua_State *L) {
+    if(gRegistrationID[0])return luaL_error(L,"registration job already active");
+    ATClearRegistrationCode();BOOL found=NO;
+    @autoreleasepool {
+        NSError *error=nil;NSDictionary *job=ATLRegistrationClaimCode(ATRegistrationDir(),&error);
+        if(job){BOOL idOK=[job[@"id"] getCString:gRegistrationID maxLength:sizeof(gRegistrationID) encoding:NSUTF8StringEncoding];
+            found=idOK && [job[@"code"] getCString:gRegistrationCode maxLength:sizeof(gRegistrationCode) encoding:NSUTF8StringEncoding];}
+    }
+    if(!found){ATClearRegistrationCode();return luaL_error(L,"registration code unavailable");}
+    if(!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent){ATClearRegistrationCode();return luaL_error(L,"keyboard unavailable");}
+    size_t length=strlen(gRegistrationCode);
+    for(size_t i=0;i<length;i++){
+        uint16_t usage=0;int shift=0;ATCheckScript(L);
+        if(!ATASCIIKey((unsigned char)gRegistrationCode[i],&usage,&shift) || shift){ATClearRegistrationCode();return luaL_error(L,"registration code invalid");}
+        BOOL ok=ATASCIIKeyEvent(YES,usage);if(ok)ok=ATASCIIKeyEvent(NO,usage);
+        if(!ok){ATClearRegistrationCode();return luaL_error(L,"keyboard event failed");}
+    }
+    ATClearRegistrationCode();lua_pushboolean(L,1);return 1;
+}
 static int l_registrationStage(lua_State *L) {
     const char *stage=luaL_checkstring(L,1);ATLRegEvent event;
     if(!strcmp(stage,"fields_ready"))event=ATL_REG_FIELDS_READY;
     else if(!strcmp(stage,"begin_submit"))event=ATL_REG_BEGIN_SUBMIT;
     else if(!strcmp(stage,"verification_seen"))event=ATL_REG_VERIFICATION_SEEN;
     else if(!strcmp(stage,"failed"))event=ATL_REG_FAILED;
+    else if(!strcmp(stage,"success"))event=ATL_REG_SUCCESS_CONFIRMED;
     else return luaL_error(L,"invalid registration stage");
     if(!gRegistrationID[0])return luaL_error(L,"no claimed registration job");
     if(event==ATL_REG_FIELDS_READY && gRegistrationPassword[0])return luaL_error(L,"registration password has not been used");
     BOOL ok=NO;
     @autoreleasepool { NSError *error=nil;ok=ATLRegistrationAdvance(ATRegistrationDir(),[NSString stringWithUTF8String:gRegistrationID],event,&error); }
     if(!ok)return luaL_error(L,"registration stage not confirmed");
-    if(event==ATL_REG_VERIFICATION_SEEN || event==ATL_REG_FAILED){ATClearRegistrationSecret();gRegistrationID[0]=0;}
+    if(event==ATL_REG_VERIFICATION_SEEN || event==ATL_REG_FAILED || event==ATL_REG_SUCCESS_CONFIRMED){ATClearRegistrationSecret();ATClearRegistrationCode();gRegistrationID[0]=0;}
     lua_pushboolean(L,1);return 1;
 }
 static char gClaimedJobID[81], gClaimedEmail[255];
@@ -1267,6 +1291,7 @@ static const luaL_Reg ATLuaFuncs[] = {
     {"findText",  l_findText},
     {"getRegistrationJob", l_getRegistrationJob},
     {"inputRegistrationPassword", l_inputRegistrationPassword},
+    {"inputRegistrationCode", l_inputRegistrationCode},
     {"registrationStage", l_registrationStage},
     {"getEmailJob", l_getEmailJob},
     {"sendEmailResult", l_sendEmailResult},
@@ -1483,7 +1508,7 @@ static void ATPlayLuaFile(NSString *scriptPath) {
     ATMemoryBudget budget = {0, 32 * 1024 * 1024};
     lua_State *L = NULL;
     @try {
-        gClaimedJobID[0]=gClaimedEmail[0]=0;gRegistrationID[0]=0;ATClearRegistrationSecret();
+        gClaimedJobID[0]=gClaimedEmail[0]=0;gRegistrationID[0]=0;ATClearRegistrationSecret();ATClearRegistrationCode();
         ATWriteStatus(YES, scriptPath.lastPathComponent);
         gScriptDeadline = ATMonotonicNow() + AT_SCRIPT_TIMEOUT_SEC;
         L = lua_newstate(ATLuaAllocator, &budget);
@@ -1501,7 +1526,7 @@ static void ATPlayLuaFile(NSString *scriptPath) {
         @try { ATReleaseAllInputs(); }
         @catch (NSException *exception) { ATLog(@"input cleanup exception: %@", exception); }
         if (L) lua_close(L);
-        ATClearRegistrationSecret();
+        ATClearRegistrationSecret();ATClearRegistrationCode();
         if(gRegistrationID[0]) {
             NSError *error=nil;
             ATLRegistrationAdvance(ATRegistrationDir(),[NSString stringWithUTF8String:gRegistrationID],ATL_REG_INTERRUPTED,&error);

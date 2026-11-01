@@ -11,6 +11,14 @@ class RegistrationLuaContracts(unittest.TestCase):
   self.assertIn('ATClearRegistrationSecret()',s)
   finish=s.split('static void ATPlayLuaFile',1)[1].split('#pragma mark - Command handling',1)[0]
   self.assertIn('ATL_REG_INTERRUPTED',finish);self.assertIn('ATClearRegistrationSecret()',finish)
+ def test_code_is_native_only_and_cleaned_on_exit(self):
+  s=(ROOT/'tweak/Tweak.xm').read_text(encoding='utf-8')
+  self.assertIn('{"inputRegistrationCode",',s)
+  body=re.search(r'static int l_inputRegistrationCode\(lua_State \*L\) \{(.*?)\n\}',s,re.S).group(1)
+  self.assertNotIn('lua_pushstring',body)
+  self.assertIn('ATClearRegistrationCode()',body)
+  finish=s.split('static void ATPlayLuaFile',1)[1].split('#pragma mark - Command handling',1)[0]
+  self.assertIn('ATClearRegistrationCode()',finish)
  def test_registration_source_linked_into_tweak(self):
   self.assertIn('../shared/ATLRegistrationJob.m',(ROOT/'tweak/Makefile').read_text(encoding='utf-8'))
 if __name__=='__main__':unittest.main()

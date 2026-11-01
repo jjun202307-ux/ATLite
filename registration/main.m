@@ -14,7 +14,7 @@ static int emit(NSData *data) {
 int main(int argc,char **argv) { @autoreleasepool {
  if(argc!=2)return 2;
  NSString *operation=[NSString stringWithUTF8String:argv[1]];
- if(![@[@"create",@"status",@"clear"] containsObject:operation])return 2;
+ if(![@[@"create",@"status",@"clear",@"code"] containsObject:operation])return 2;
  NSString *base=ATLBaseDir();if(!base.length)return 2;
  NSString *directory=[base stringByAppendingPathComponent:@"Registration"];
  if(mkdir(directory.fileSystemRepresentation,0700)!=0 && errno!=EEXIST)return 2;

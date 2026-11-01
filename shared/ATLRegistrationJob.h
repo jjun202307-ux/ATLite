@@ -6,3 +6,5 @@ FOUNDATION_EXPORT NSDictionary *ATLRegistrationClaimPending(NSString *directory,
 FOUNDATION_EXPORT NSDictionary *ATLRegistrationClaim(NSString *directory, NSString *jobID, NSError **error);
 FOUNDATION_EXPORT BOOL ATLRegistrationAdvance(NSString *directory, NSString *jobID, ATLRegEvent event, NSError **error);
 FOUNDATION_EXPORT BOOL ATLRegistrationClear(NSString *directory, NSString *jobID, NSError **error);
+FOUNDATION_EXPORT BOOL ATLRegistrationSetCode(NSString *directory, NSString *jobID, NSString *code, NSError **error);
+FOUNDATION_EXPORT NSDictionary *ATLRegistrationClaimCode(NSString *directory, NSError **error);
