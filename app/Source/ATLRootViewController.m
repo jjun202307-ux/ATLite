@@ -7,6 +7,24 @@
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 
+// Locate the system Files app's on-device storage by container identifier,
+// rather than baking a device-specific container UUID into the application.
+static NSString *ATLFilesDirectory(void) {
+    NSString *root = @"/rootfs/var/mobile/Containers/Shared/AppGroup";
+    NSArray<NSString *> *entries = [NSFileManager.defaultManager contentsOfDirectoryAtPath:root error:nil];
+    NSString *result = nil;
+    for (NSString *entry in entries) {
+        NSString *container = [root stringByAppendingPathComponent:entry];
+        NSDictionary *metadata = [NSDictionary dictionaryWithContentsOfFile:[container stringByAppendingPathComponent:@".com.apple.mobile_container_manager.metadata.plist"]];
+        if (![metadata[@"MCMMetadataIdentifier"] isEqual:@"group.com.apple.FileProvider.LocalStorage"]) continue;
+        NSString *storage = [container stringByAppendingPathComponent:@"File Provider Storage"];
+        BOOL directory = NO;
+        if (![NSFileManager.defaultManager fileExistsAtPath:storage isDirectory:&directory] || !directory || result) return nil;
+        result = [storage stringByAppendingPathComponent:@"ATLite"];
+    }
+    return result;
+}
+
 // 手机本地文件入口；这些文件不会通过上传服务公开。
 @interface ATLLocalTextController : UIViewController
 @property(nonatomic,copy) NSString *fileName;
@@ -26,8 +44,8 @@
     self.editor.autocorrectionType = UITextAutocorrectionTypeNo;
     self.editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
     [self.view addSubview:self.editor];
-    NSString *base = ATLBaseDir();
-    NSString *path = base.length ? [[base stringByAppendingPathComponent:@"Local"] stringByAppendingPathComponent:self.fileName] : nil;
+    NSString *dir = ATLFilesDirectory();
+    NSString *path = dir.length ? [dir stringByAppendingPathComponent:self.fileName] : nil;
     NSError *error = nil;
     NSString *text = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&error] : nil;
     if (text) self.editor.text = text;
@@ -41,8 +59,7 @@
     if (self.editable) self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"保存" style:UIBarButtonItemStyleDone target:self action:@selector(saveFile)];
 }
 - (void)saveFile {
-    NSString *base = ATLBaseDir();
-    NSString *dir = base.length ? [base stringByAppendingPathComponent:@"Local"] : nil;
+    NSString *dir = ATLFilesDirectory();
     NSError *error = nil;
     BOOL ok = dir && [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:&error];
     NSString *path = [dir stringByAppendingPathComponent:self.fileName];
@@ -102,8 +119,8 @@
 
 - (void)openLocalFiles {
     UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"本机文件" message:@"结果文件包含账号和密码，请妥善保管。" preferredStyle:UIAlertControllerStyleActionSheet];
-    for (NSString *name in @[@"config.ini", @"results.txt"]) {
-        BOOL edit = [name isEqualToString:@"config.ini"];
+    for (NSString *name in @[@"config.txt", @"results.txt"]) {
+        BOOL edit = [name isEqualToString:@"config.txt"];
         [menu addAction:[UIAlertAction actionWithTitle:edit ? @"编辑配置" : @"查看结果" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             ATLLocalTextController *controller = [ATLLocalTextController new];
             controller.fileName = name; controller.editable = edit;
