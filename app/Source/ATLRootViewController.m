@@ -7,6 +7,53 @@
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 
+// 手机本地文件入口；这些文件不会通过上传服务公开。
+@interface ATLLocalTextController : UIViewController
+@property(nonatomic,copy) NSString *fileName;
+@property(nonatomic,assign) BOOL editable;
+@property(nonatomic,strong) UITextView *editor;
+@end
+
+@implementation ATLLocalTextController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = self.editable ? @"本机配置" : @"本机结果";
+    self.view.backgroundColor = UIColor.systemBackgroundColor;
+    self.editor = [[UITextView alloc] initWithFrame:self.view.bounds];
+    self.editor.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.editor.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
+    self.editor.editable = self.editable;
+    self.editor.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    [self.view addSubview:self.editor];
+    NSString *base = ATLBaseDir();
+    NSString *path = base.length ? [[base stringByAppendingPathComponent:@"Local"] stringByAppendingPathComponent:self.fileName] : nil;
+    NSError *error = nil;
+    NSString *text = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&error] : nil;
+    if (text) self.editor.text = text;
+    else if (error.code == NSFileReadNoSuchFileError && self.editable) self.editor.text = @"[general]\nPROXY_RESET_URL=\n";
+    else if (error.code == NSFileReadNoSuchFileError) self.editor.text = @"";
+    else {
+        self.editor.editable = NO;
+        self.editor.text = @"文件无法读取，请检查本机目录权限。";
+        return;
+    }
+    if (self.editable) self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"保存" style:UIBarButtonItemStyleDone target:self action:@selector(saveFile)];
+}
+- (void)saveFile {
+    NSString *base = ATLBaseDir();
+    NSString *dir = base.length ? [base stringByAppendingPathComponent:@"Local"] : nil;
+    NSError *error = nil;
+    BOOL ok = dir && [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:&error];
+    NSString *path = [dir stringByAppendingPathComponent:self.fileName];
+    if (ok) ok = [self.editor.text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error];
+    if (ok) ok = [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions:@0600} ofItemAtPath:path error:&error];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:ok ? @"已保存" : @"保存失败" message:ok ? @"配置已保存到手机。" : @"请检查本机目录权限后重试。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+@end
+
 @interface ATLRootViewController ()
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) ATLWebServer *server;
@@ -41,6 +88,7 @@
                                                             target:self action:@selector(stopScript)];
     stop.tintColor = [UIColor systemRedColor];
     self.navigationItem.rightBarButtonItems = @[stop, log, refresh];
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"本机文件" style:UIBarButtonItemStylePlain target:self action:@selector(openLocalFiles)];
 
     // 启动期任何异常都不允许杀死 App（v0.1.0 "打不开"的教训：启动链路必须防御）
     @try {
@@ -50,6 +98,21 @@
         self.statusLabel.text = [NSString stringWithFormat:@"启动异常: %@", e];
     }
     [self refresh];
+}
+
+- (void)openLocalFiles {
+    UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"本机文件" message:@"结果文件包含账号和密码，请妥善保管。" preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSString *name in @[@"config.ini", @"results.txt"]) {
+        BOOL edit = [name isEqualToString:@"config.ini"];
+        [menu addAction:[UIAlertAction actionWithTitle:edit ? @"编辑配置" : @"查看结果" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            ATLLocalTextController *controller = [ATLLocalTextController new];
+            controller.fileName = name; controller.editable = edit;
+            [self.navigationController pushViewController:controller animated:YES];
+        }]];
+    }
+    [menu addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    menu.popoverPresentationController.barButtonItem = self.navigationItem.leftBarButtonItem;
+    [self presentViewController:menu animated:YES completion:nil];
 }
 
 #pragma mark - Bundled scripts (R9/E9)
