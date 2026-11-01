@@ -116,10 +116,11 @@ def main(deb_path):
     for executable, kind in [('Applications/ATLite.app/ATLite', 2),
                              ('Applications/ATLite.app/ATLiteProbe', 2),
                              ('Applications/ATLite.app/ATLOCRWorker', 2),
+                             ('Applications/ATLite.app/ATLiteRegistration', 2),
                              ('Library/MobileSubstrate/DynamicLibraries/ATLiteTweak.dylib', 6)]:
         member = files.get(executable)
         check('executable present: ' + executable, member is not None and bool(member.mode & 0o111))
-        if member and executable.endswith(('/ATLiteProbe','/ATLOCRWorker')):
+        if member and executable.endswith(('/ATLiteProbe','/ATLOCRWorker','/ATLiteRegistration')):
             check('tool archive mode has no setuid/setgid: ' + executable, not member.mode & 0o6000)
         if member:
             try:

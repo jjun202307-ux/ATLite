@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <assert.h>
 #import "../shared/ATLRegistrationCLI.h"
+#import "../shared/ATLRegistrationJob.h"
 int main(void) { @autoreleasepool {
  char path[]="/tmp/atlregcli-XXXXXX";assert(mkdtemp(path));NSString *dir=[NSString stringWithUTF8String:path];
  NSDictionary *p=@{@"id":@"cli-1",@"email":@"dummy@example.invalid",@"username":@"dummy_user1",@"password":@"Dummy1!",@"fullName":@"Test User",@"zip":@"02203"};
@@ -11,5 +12,8 @@ int main(void) { @autoreleasepool {
  NSDictionary *status=[NSJSONSerialization JSONObjectWithData:out options:0 error:nil];assert([status[@"state"] isEqual:@"pending"] && !status[@"password"]);
  assert(ATLRegistrationCLI(dir,@"clear",query,&out)!=0);assert(ATLRegistrationCLI(dir,@"status",input,&out)!=0);
  assert(ATLRegistrationCLI(dir,@"unsafe",input,&out)!=0);assert(ATLRegistrationCLI(dir,@"create",[NSMutableData dataWithLength:16385],&out)!=0);
+ NSError *error=nil;assert(ATLRegistrationClaim(dir,@"cli-1",&error));assert(ATLRegistrationAdvance(dir,@"cli-1",ATL_REG_INTERRUPTED,&error));
+ NSData *numeric=[@"{\"id\":\"cli-1\",\"confirmed\":1}" dataUsingEncoding:NSUTF8StringEncoding];assert(ATLRegistrationCLI(dir,@"clear",numeric,&out)!=0);
+ NSData *clear=[@"{\"id\":\"cli-1\",\"confirmed\":true}" dataUsingEncoding:NSUTF8StringEncoding];assert(ATLRegistrationCLI(dir,@"clear",clear,&out)==0);assert(ATLRegistrationCLI(dir,@"status",query,&out)!=0);
  NSFileManager *fm=NSFileManager.defaultManager;[fm removeItemAtPath:[dir stringByAppendingPathComponent:@"registration-job.json"] error:nil];[fm removeItemAtPath:[dir stringByAppendingPathComponent:@"registration-job.lock"] error:nil];[fm removeItemAtPath:dir error:nil];return 0;
 } }
