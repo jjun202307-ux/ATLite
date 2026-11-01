@@ -9,3 +9,11 @@ class RegistrationJobNative(unittest.TestCase):
    p=subprocess.run(['clang','-fobjc-arc','-framework','Foundation',str(ROOT/'tests/native_registration_job.m'),str(ROOT/'shared/ATLRegistrationJob.m'),'-o',str(exe)],capture_output=True,text=True,timeout=60)
    self.assertEqual(p.returncode,0,p.stderr)
    p=subprocess.run([str(exe)],capture_output=True,text=True,timeout=10);self.assertEqual(p.returncode,0,p.stderr)
+
+ def test_cli_redacts_and_bounds_input(self):
+  with tempfile.TemporaryDirectory() as t:
+   exe=pathlib.Path(t)/'cli-test'
+   files=['tests/native_registration_cli.m','shared/ATLRegistrationCLI.m','shared/ATLRegistrationJob.m']
+   p=subprocess.run(['clang','-fobjc-arc','-framework','Foundation',*[str(ROOT/f) for f in files],'-o',str(exe)],capture_output=True,text=True,timeout=60)
+   self.assertEqual(p.returncode,0,p.stderr)
+   p=subprocess.run([str(exe)],capture_output=True,text=True,timeout=10);self.assertEqual(p.returncode,0,p.stderr)
