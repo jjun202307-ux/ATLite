@@ -16,8 +16,9 @@ int main(void) { @autoreleasepool {
  e=nil;NSDictionary *public=ATLRegistrationCreate(base,payload,&e);assert(public && !e);assert([public[@"state"] isEqual:@"pending"]);assert(!public[@"password"] && !public[@"email"]);
  e=nil;assert(!ATLRegistrationCreate(base,payload,&e) && e.code==409);
  e=nil;assert(!ATLRegistrationClear(base,@"test-1",&e) && e.code==409);
- e=nil;NSDictionary *claimed=ATLRegistrationClaim(base,@"test-1",&e);assert(claimed && [claimed[@"password"] isEqual:payload[@"password"]]);
+ e=nil;NSDictionary *claimed=ATLRegistrationClaimPending(base,&e);assert(claimed && [claimed[@"password"] isEqual:payload[@"password"]]);
  e=nil;assert(!ATLRegistrationClaim(base,@"test-1",&e) && e.code==409);
+ e=nil;assert(!ATLRegistrationClaimPending(base,&e) && e.code==409);
  e=nil;assert(!ATLRegistrationAdvance(base,@"wrong",ATL_REG_FIELDS_READY,&e) && e.code==409);
  e=nil;assert(ATLRegistrationAdvance(base,@"test-1",ATL_REG_FIELDS_READY,&e));
  e=nil;assert(ATLRegistrationAdvance(base,@"test-1",ATL_REG_BEGIN_SUBMIT,&e));

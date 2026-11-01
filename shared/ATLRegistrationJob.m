@@ -72,14 +72,18 @@ NSDictionary *ATLRegistrationStatus(NSString *directory,NSString *jobID,NSError 
  if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return nil;
  @try {NSDictionary *job=ATLRegLoad(&store,error);return job && ATLRegMatch(job,jobID,error)?ATLRegPublic(job):nil;} @finally {ATLRegClose(&store);}
 }
-NSDictionary *ATLRegistrationClaim(NSString *directory,NSString *jobID,NSError **error){
+static NSDictionary *ATLRegClaim(NSString *directory,NSString *jobID,NSError **error){
  if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return nil;
- @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return nil;ATLRegState state,next;
+ @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || (jobID && !ATLRegMatch(job,jobID,error)))return nil;ATLRegState state,next;
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,ATL_REG_CLAIM,&next)){ATLRegError(error,409,@"任务不能重复领取");return nil;}
   NSMutableDictionary *p=[job mutableCopy];[p removeObjectForKey:@"state"];if(!ATLRegValidPayload(p)){ATLRegError(error,500,@"任务资料无效");return nil;}
   job[@"state"]=ATLRegName(next);return ATLRegSave(&store,job,error)?[job copy]:nil;
  } @finally {ATLRegClose(&store);}
 }
+NSDictionary *ATLRegistrationClaim(NSString *directory,NSString *jobID,NSError **error){
+ if(!jobID){ATLRegError(error,400,@"任务编号无效");return nil;}return ATLRegClaim(directory,jobID,error);
+}
+NSDictionary *ATLRegistrationClaimPending(NSString *directory,NSError **error){return ATLRegClaim(directory,nil,error);}
 BOOL ATLRegistrationAdvance(NSString *directory,NSString *jobID,ATLRegEvent event,NSError **error){
  if(error)*error=nil;if(event==ATL_REG_CLAIM){ATLRegError(error,400,@"请通过领取接口操作");return NO;}ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
  @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state,next;
