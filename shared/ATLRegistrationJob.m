@@ -42,7 +42,10 @@ static BOOL ATLRegAcquire(NSString *directory,ATLRegStore *store,NSError **error
 }
 static NSMutableDictionary *ATLRegLoad(ATLRegStore *store,NSError **error) {
  unsigned char bytes[ATL_REG_MAX_BYTES];size_t n=0;
- if(!ATLRegRead(store,bytes,sizeof(bytes),&n)){memset(bytes,0,sizeof(bytes));ATLRegError(error,500,@"任务记录不可读取");return nil;}
+ if(!ATLRegRead(store,bytes,sizeof(bytes),&n)){
+  memset(bytes,0,sizeof(bytes));struct stat st;int status=fstatat(store->dirfd,"registration-job.json",&st,AT_SYMLINK_NOFOLLOW);
+  ATLRegError(error,status!=0 && errno==ENOENT?404:500,@"任务记录不存在或不可读取");return nil;
+ }
  NSData *data=[NSData dataWithBytes:bytes length:n];memset(bytes,0,sizeof(bytes));
  id object=[NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil];ATLRegState state;
  if(![object isKindOfClass:NSMutableDictionary.class] || !ATLRegText(object[@"id"],80,@"^[A-Za-z0-9-]+$") || !ATLRegStateForName(object[@"state"],&state)) {ATLRegError(error,500,@"任务记录无效");return nil;}
@@ -85,5 +88,13 @@ BOOL ATLRegistrationAdvance(NSString *directory,NSString *jobID,ATLRegEvent even
   if(next==ATL_REG_REVIEW || next==ATL_REG_ERROR || next==ATL_REG_DONE || next==ATL_REG_WAIT_CODE)
    for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip"]) [job removeObjectForKey:key];
   return ATLRegSave(&store,job,error);
+ } @finally {ATLRegClose(&store);}
+}
+
+BOOL ATLRegistrationClear(NSString *directory,NSString *jobID,NSError **error){
+ if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
+ @try {NSDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state;
+  if(!ATLRegStateForName(job[@"state"],&state) || !(state==ATL_REG_DONE || state==ATL_REG_ERROR || state==ATL_REG_REVIEW)){ATLRegError(error,409,@"任务仍在运行，不能清除");return NO;}
+  if(ATLRegRemove(&store)!=1){ATLRegError(error,500,@"清除结果未确认，请核对");return NO;}return YES;
  } @finally {ATLRegClose(&store);}
 }

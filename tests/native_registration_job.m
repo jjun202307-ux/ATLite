@@ -15,6 +15,7 @@ int main(void) { @autoreleasepool {
  e=nil;assert(!ATLRegistrationAdvance(base,@"test-1",ATL_REG_CLAIM,&e));
  e=nil;NSDictionary *public=ATLRegistrationCreate(base,payload,&e);assert(public && !e);assert([public[@"state"] isEqual:@"pending"]);assert(!public[@"password"] && !public[@"email"]);
  e=nil;assert(!ATLRegistrationCreate(base,payload,&e) && e.code==409);
+ e=nil;assert(!ATLRegistrationClear(base,@"test-1",&e) && e.code==409);
  e=nil;NSDictionary *claimed=ATLRegistrationClaim(base,@"test-1",&e);assert(claimed && [claimed[@"password"] isEqual:payload[@"password"]]);
  e=nil;assert(!ATLRegistrationClaim(base,@"test-1",&e) && e.code==409);
  e=nil;assert(!ATLRegistrationAdvance(base,@"wrong",ATL_REG_FIELDS_READY,&e) && e.code==409);
@@ -23,7 +24,9 @@ int main(void) { @autoreleasepool {
  e=nil;assert(!ATLRegistrationAdvance(base,@"test-1",ATL_REG_BEGIN_SUBMIT,&e) && e.code==409);
  e=nil;assert(ATLRegistrationAdvance(base,@"test-1",ATL_REG_INTERRUPTED,&e));
  e=nil;public=ATLRegistrationStatus(base,@"test-1",&e);assert([public[@"state"] isEqual:@"review"] && !public[@"password"] && !public[@"email"]);
+ e=nil;assert(!ATLRegistrationClear(base,@"wrong",&e) && e.code==409);
  NSString *job=[base stringByAppendingPathComponent:@"registration-job.json"];NSData *d=[NSData dataWithContentsOfFile:job];NSString *text=[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];assert(![text containsString:@"Aa1!@#-_.+"] && ![text containsString:@"dummy@example.invalid"]);
+ e=nil;assert(ATLRegistrationClear(base,@"test-1",&e));e=nil;assert(!ATLRegistrationStatus(base,@"test-1",&e) && e.code==404);
  [[NSFileManager defaultManager] removeItemAtPath:job error:nil];[[NSFileManager defaultManager] removeItemAtPath:[base stringByAppendingPathComponent:@"registration-job.lock"] error:nil];[[NSFileManager defaultManager] removeItemAtPath:base error:nil];
  return 0;
 } }

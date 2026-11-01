@@ -4,3 +4,4 @@ FOUNDATION_EXPORT NSDictionary *ATLRegistrationCreate(NSString *directory, NSDic
 FOUNDATION_EXPORT NSDictionary *ATLRegistrationStatus(NSString *directory, NSString *jobID, NSError **error);
 FOUNDATION_EXPORT NSDictionary *ATLRegistrationClaim(NSString *directory, NSString *jobID, NSError **error);
 FOUNDATION_EXPORT BOOL ATLRegistrationAdvance(NSString *directory, NSString *jobID, ATLRegEvent event, NSError **error);
+FOUNDATION_EXPORT BOOL ATLRegistrationClear(NSString *directory, NSString *jobID, NSError **error);

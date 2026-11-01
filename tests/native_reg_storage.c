@@ -26,8 +26,9 @@ int main(void) {
  assert(ATLRegRead(&s,result,sizeof(result),&n));
  assert(unlinkat(s.dirfd,"registration-job.json",0)==0);
  assert(symlinkat("/etc/passwd",s.dirfd,"registration-job.json")==0);
- assert(!ATLRegRead(&s,result,sizeof(result),&n));assert(!ATLRegWrite(&s,data,sizeof(data)-1,"second"));
+ assert(!ATLRegRead(&s,result,sizeof(result),&n));assert(!ATLRegWrite(&s,data,sizeof(data)-1,"second"));assert(!ATLRegRemove(&s));
  assert(unlinkat(s.dirfd,"registration-job.json",0)==0);
+ assert(ATLRegWrite(&s,data,sizeof(data)-1,"after") == 1);assert(ATLRegRemove(&s)==1);assert(!ATLRegRead(&s,result,sizeof(result),&n));
  ATLRegClose(&s);assert(ATLRegOpen(&second,dir));ATLRegClose(&second);
  assert(chmod(dir,0755)==0);assert(!ATLRegOpen(&second,dir));assert(chmod(dir,0700)==0);
  char lock[256];assert(snprintf(lock,sizeof(lock),"%s/registration-job.lock",dir)>0);assert(unlink(lock)==0);assert(rmdir(dir)==0);

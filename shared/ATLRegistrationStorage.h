@@ -68,4 +68,14 @@ static inline int ATLRegWrite(ATLRegStore *s,const void *data,size_t length,cons
  if(renameat(s->dirfd,temp,s->dirfd,"registration-job.json")!=0) { unlinkat(s->dirfd,temp,0);return 0; }
  return ATL_REG_FSYNC(s->dirfd)==0 ? 1 : -1;
 }
+/* Remove only the verified regular private record while holding the lock.
+   -1 means unlink occurred but directory durability is uncertain. */
+static inline int ATLRegRemove(ATLRegStore *s) {
+ if(!s || s->lockfd<0) return 0;
+ int fd=openat(s->dirfd,"registration-job.json",O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+ if(fd<0) return 0;
+ int valid=ATLRegPrivateFile(fd);close(fd);if(!valid) return 0;
+ if(unlinkat(s->dirfd,"registration-job.json",0)!=0) return 0;
+ return ATL_REG_FSYNC(s->dirfd)==0 ? 1 : -1;
+}
 #endif
