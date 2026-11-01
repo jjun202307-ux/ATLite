@@ -11,12 +11,17 @@ static BOOL ATLRegText(id value,NSUInteger max,NSString *pattern) {
  NSTextCheckingResult *match=[regex firstMatchInString:value options:0 range:NSMakeRange(0,[value length])];
  return match && match.range.location==0 && match.range.length==[value length];
 }
+static BOOL ATLRegEmail(id value) {
+ if(!ATLRegText(value,254,@"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$")) return NO;
+ NSString *local=[[value componentsSeparatedByString:@"@"] firstObject];
+ return local.length<=64 && ![local hasPrefix:@"."] && ![local hasSuffix:@"."] && ![local containsString:@".."]; 
+}
 static BOOL ATLRegValidPayload(NSDictionary *p) {
  if(![p isKindOfClass:NSDictionary.class] || p.count!=6) return NO;
  static NSSet *zipcodes;static dispatch_once_t once;
  dispatch_once(&once,^{zipcodes=[NSSet setWithArray:@[@"02203",@"90012",@"93309",@"93721",@"94612",@"95821",@"92101",@"95113",@"70808",@"71105",@"12207",@"11714",@"10461",@"11201",@"14202",@"11373",@"11742",@"10027",@"14604",@"10601"]];});
  return ATLRegText(p[@"id"],80,@"^[A-Za-z0-9-]+$") &&
-  ATLRegText(p[@"email"],254,@"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$") &&
+  ATLRegEmail(p[@"email"]) &&
   ATLRegText(p[@"username"],64,@"^[A-Za-z0-9_.-]+$") &&
   ATLRegText(p[@"password"],254,@"^[\\x20-\\x7e]+$") &&
   ATLRegText(p[@"fullName"],100,@"^[A-Za-z]+ [A-Za-z]+$") &&
@@ -37,7 +42,7 @@ static BOOL ATLRegAcquire(NSString *directory,ATLRegStore *store,NSError **error
 }
 static NSMutableDictionary *ATLRegLoad(ATLRegStore *store,NSError **error) {
  unsigned char bytes[ATL_REG_MAX_BYTES];size_t n=0;
- if(!ATLRegRead(store,bytes,sizeof(bytes),&n)){ATLRegError(error,500,@"任务记录不可读取");return nil;}
+ if(!ATLRegRead(store,bytes,sizeof(bytes),&n)){memset(bytes,0,sizeof(bytes));ATLRegError(error,500,@"任务记录不可读取");return nil;}
  NSData *data=[NSData dataWithBytes:bytes length:n];memset(bytes,0,sizeof(bytes));
  id object=[NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil];ATLRegState state;
  if(![object isKindOfClass:NSMutableDictionary.class] || !ATLRegText(object[@"id"],80,@"^[A-Za-z0-9-]+$") || !ATLRegStateForName(object[@"state"],&state)) {ATLRegError(error,500,@"任务记录无效");return nil;}

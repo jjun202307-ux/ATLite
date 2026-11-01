@@ -8,6 +8,8 @@ int main(void) { @autoreleasepool {
  NSError *e=nil;
  NSMutableDictionary *bad=[payload mutableCopy];bad[@"zip"]=@"2203";assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
  bad=[payload mutableCopy];bad[@"zip"]=@"99999";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
+ bad=[payload mutableCopy];bad[@"email"]=@"bad..local@example.invalid";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
+ bad=[payload mutableCopy];bad[@"email"]=@"a@-bad.example";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
  bad=[payload mutableCopy];bad[@"password"]=@"bad\nvalue";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
  bad=[payload mutableCopy];bad[@"extra"]=@"value";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
  e=nil;assert(!ATLRegistrationAdvance(base,@"test-1",ATL_REG_CLAIM,&e));
