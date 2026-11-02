@@ -92,8 +92,16 @@ jobs:
           find .theos -name 'ATLiteProbe' -print
           test -n "$(find .theos -name 'ATLiteProbe' -print -quit)"
 
+      - name: Build isolated on-device storage test
+        run: |
+          set -eux
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=14.0 -fobjc-arc -framework Foundation tests/native_registration_backup.m shared/ATLRegistrationJob.m -o packages/ATLBackupSelfTest
+          ldid -Sprobe/entitlements.plist packages/ATLBackupSelfTest
+
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
           name: atlite-deb
-          path: packages/*.deb
+          path: |
+            packages/*.deb
+            packages/ATLBackupSelfTest
