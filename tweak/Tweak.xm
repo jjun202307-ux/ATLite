@@ -2,7 +2,7 @@
 #import "../shared/ATLJBRootPath.h"
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
-// ATLiteTweak v0.3.25 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.26 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -1088,6 +1088,17 @@ static int l_ocrText(lua_State *L) {
     }
     return 1;
 }
+// Short, interruptible interval between emitted keyboard characters.
+static void ATTypingPause(lua_State *L) {
+    unsigned int remaining=40+arc4random_uniform(61);
+    while(remaining) {
+        ATCheckScript(L);
+        unsigned int slice=remaining>20?20:remaining;
+        struct timespec req={0,(long)slice*1000000L};
+        while(nanosleep(&req,&req)!=0 && errno==EINTR) ATCheckScript(L);
+        remaining-=slice;
+    }
+}
 static int l_inputText(lua_State *L) {
     size_t length=0; const unsigned char *text=(const unsigned char *)luaL_checklstring(L,1,&length);
     if (!length || length>254) return luaL_error(L,"inputText: expected 1..254 printable ASCII bytes");
@@ -1102,6 +1113,7 @@ static int l_inputText(lua_State *L) {
         if (ok) ok=ATASCIIKeyEvent(NO,usages[i]);
         if (shifts[i]) ok=ATASCIIKeyEvent(NO,0xe1) && ok;
         if (!ok) return luaL_error(L,"inputText: event creation failed");
+        if (i+1<length) ATTypingPause(L);
     }
     lua_pushboolean(L,1); return 1; // dispatched, not a guarantee that a field had focus
 }
@@ -1153,6 +1165,7 @@ static int l_inputRegistrationPassword(lua_State *L) {
         if(ok)ok=ATASCIIKeyEvent(YES,usage);if(ok)ok=ATASCIIKeyEvent(NO,usage);
         if(shift)ok=ATASCIIKeyEvent(NO,0xe1) && ok;
         if(!ok){ATClearRegistrationSecret();return luaL_error(L,"keyboard event failed");}
+        if(i+1<length) ATTypingPause(L);
     }
     ATClearRegistrationSecret();lua_pushboolean(L,1);return 1;
 }
@@ -1172,6 +1185,7 @@ static int l_inputRegistrationCode(lua_State *L) {
         if(!ATASCIIKey((unsigned char)gRegistrationCode[i],&usage,&shift) || shift){ATClearRegistrationCode();return luaL_error(L,"registration code invalid");}
         BOOL ok=ATASCIIKeyEvent(YES,usage);if(ok)ok=ATASCIIKeyEvent(NO,usage);
         if(!ok){ATClearRegistrationCode();return luaL_error(L,"keyboard event failed");}
+        if(i+1<length) ATTypingPause(L);
     }
     ATClearRegistrationCode();lua_pushboolean(L,1);return 1;
 }
@@ -1266,7 +1280,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.25 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.26 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1771,7 +1785,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.25 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.26 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

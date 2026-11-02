@@ -63,6 +63,20 @@ class RuntimeContracts(unittest.TestCase):
         self.assertIn('ATLEmailFinishJob',SRC)
         self.assertIn('ATRecognizeScreen',SRC)
 
+    def test_keyboard_typing_pauses_are_interruptible_and_not_clipboard(self):
+        self.assertIn('ATTypingPause', SRC)
+        for name in ('l_inputText', 'l_inputRegistrationPassword', 'l_inputRegistrationCode'):
+            body=SRC[SRC.index('static int '+name):]
+            body=body[:body.index('\n}')]
+            self.assertIn('ATASCIIKeyEvent(YES', body)
+            self.assertIn('ATASCIIKeyEvent(NO', body)
+            self.assertIn('ATTypingPause(L)', body)
+            self.assertNotIn('UIPasteboard', body)
+        helper=SRC[SRC.index('static void ATTypingPause'):]
+        helper=helper[:helper.index('\n}')]
+        self.assertIn('arc4random_uniform', helper)
+        self.assertIn('ATCheckScript(L)', helper)
+
     def test_native_buffers_freed_before_lua_tables(self):
         for name in ['l_findColor','l_findImage']:
             body=SRC[SRC.index('static int '+name):]
