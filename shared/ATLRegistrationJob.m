@@ -1,6 +1,7 @@
 #import "ATLRegistrationJob.h"
 #import <dispatch/dispatch.h>
 #import "ATLRegistrationStorage.h"
+#import "ATLRegistrationBackup.h"
 
 static void ATLRegError(NSError **error, NSInteger code, NSString *message) {
  if(error) *error=[NSError errorWithDomain:@"ATLRegistrationJob" code:code userInfo:@{NSLocalizedDescriptionKey:message}];
@@ -17,7 +18,10 @@ static BOOL ATLRegEmail(id value) {
  return local.length<=64 && ![local hasPrefix:@"."] && ![local hasSuffix:@"."] && ![local containsString:@".."]; 
 }
 static BOOL ATLRegValidPayload(NSDictionary *p) {
- if(![p isKindOfClass:NSDictionary.class] || p.count!=6) return NO;
+ if(![p isKindOfClass:NSDictionary.class] || (p.count!=6 && p.count!=8)) return NO;
+ NSSet *allowed=[NSSet setWithArray:@[@"id",@"email",@"username",@"password",@"fullName",@"zip",@"pickup_api",@"country"]];
+ for(NSString *key in p)if(![allowed containsObject:key])return NO;
+ if(p.count==8 && (!ATLBackupField(p[@"pickup_api"],4096) || !ATLBackupField(p[@"country"],80) || !ATLBackupField(p[@"password"],254) || !ATLBackupField(p[@"email"],254) || !ATLBackupField(p[@"username"],64)))return NO;
  static NSSet *zipcodes;static dispatch_once_t once;
  dispatch_once(&once,^{zipcodes=[NSSet setWithArray:@[@"02203",@"90012",@"93309",@"93721",@"94612",@"95821",@"92101",@"95113",@"70808",@"71105",@"12207",@"11714",@"10461",@"11201",@"14202",@"11373",@"11742",@"10027",@"14604",@"10601"]];});
  return ATLRegText(p[@"id"],80,@"^[A-Za-z0-9-]+$") &&
@@ -65,12 +69,13 @@ NSDictionary *ATLRegistrationCreate(NSString *directory,NSDictionary *payload,NS
  if(error)*error=nil;if(!ATLRegValidPayload(payload)){ATLRegError(error,400,@"注册资料格式无效");return nil;}
  ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return nil;
  @try {struct stat st;if(fstatat(store.dirfd,"registration-job.json",&st,AT_SYMLINK_NOFOLLOW)==0){ATLRegError(error,409,@"已有任务，请先核对");return nil;}if(errno!=ENOENT){ATLRegError(error,500,@"任务目录不可读取");return nil;}
-  NSMutableDictionary *job=[payload mutableCopy];job[@"state"]=@"pending";return ATLRegSave(&store,job,error)?ATLRegPublic(job):nil;
+  if(payload[@"pickup_api"] && !ATLBackupCapture(directory,payload)){ATLRegError(error,500,@"本机备份未保存，任务未接收");return nil;}
+  NSMutableDictionary *job=[payload mutableCopy];job[@"state"]=@"pending";if(!ATLRegSave(&store,job,error))return nil;ATLBackupExport(directory,job);return ATLRegPublic(job);
  } @finally {ATLRegClose(&store);}
 }
 NSDictionary *ATLRegistrationStatus(NSString *directory,NSString *jobID,NSError **error){
  if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return nil;
- @try {NSDictionary *job=ATLRegLoad(&store,error);return job && ATLRegMatch(job,jobID,error)?ATLRegPublic(job):nil;} @finally {ATLRegClose(&store);}
+ @try {NSDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return nil;ATLBackupExport(directory,job);return ATLRegPublic(job);} @finally {ATLRegClose(&store);}
 }
 static NSDictionary *ATLRegClaim(NSString *directory,NSString *jobID,NSError **error){
  if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return nil;
@@ -90,8 +95,8 @@ BOOL ATLRegistrationAdvance(NSString *directory,NSString *jobID,ATLRegEvent even
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,event,&next)){ATLRegError(error,409,@"任务阶段不允许此操作");return NO;}
   job[@"state"]=ATLRegName(next);
   if(next==ATL_REG_REVIEW || next==ATL_REG_ERROR || next==ATL_REG_DONE || next==ATL_REG_WAIT_CODE)
-   for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip",@"code"]) [job removeObjectForKey:key];
-  return ATLRegSave(&store,job,error);
+   for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip",@"code",@"pickup_api",@"country"]) [job removeObjectForKey:key];
+  if(!ATLRegSave(&store,job,error))return NO;ATLBackupExport(directory,job);return YES;
  } @finally {ATLRegClose(&store);}
 }
 
@@ -99,6 +104,7 @@ BOOL ATLRegistrationClear(NSString *directory,NSString *jobID,NSError **error){
  if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
  @try {NSDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state;
   if(!ATLRegStateForName(job[@"state"],&state) || !(state==ATL_REG_DONE || state==ATL_REG_ERROR || state==ATL_REG_REVIEW)){ATLRegError(error,409,@"任务仍在运行，不能清除");return NO;}
+  if(!ATLBackupExport(directory,job)){ATLRegError(error,500,@"本机结果尚未导出，保留任务供重试");return NO;}
   if(ATLRegRemove(&store)!=1){ATLRegError(error,500,@"清除结果未确认，请核对");return NO;}return YES;
  } @finally {ATLRegClose(&store);}
 }
@@ -108,7 +114,7 @@ BOOL ATLRegistrationSetCode(NSString *directory,NSString *jobID,NSString *code,N
  ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
  @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state,next;
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,ATL_REG_CODE_STAGED,&next)){ATLRegError(error,409,@"任务不等待验证码");return NO;}
-  job[@"state"]=ATLRegName(next);job[@"code"]=code;return ATLRegSave(&store,job,error);
+  job[@"state"]=ATLRegName(next);job[@"code"]=code;if(!ATLRegSave(&store,job,error))return NO;ATLBackupExport(directory,job);return YES;
  } @finally {ATLRegClose(&store);}
 }
 NSDictionary *ATLRegistrationClaimCode(NSString *directory,NSError **error){
@@ -126,10 +132,10 @@ BOOL ATLRegistrationRecover(NSString *directory,NSError **error){
  @try {NSError *readError=nil;NSMutableDictionary *job=ATLRegLoad(&store,&readError);
   if(!job){if(readError.code==404)return YES;if(error)*error=readError;return NO;}
   ATLRegState state,next;if(!ATLRegStateForName(job[@"state"],&state)){ATLRegError(error,500,@"任务状态无效");return NO;}
-  if(!(state==ATL_REG_PREPARING || state==ATL_REG_READY || state==ATL_REG_SUBMITTING || state==ATL_REG_CODE_READY || state==ATL_REG_ENTERING_CODE))return YES;
+  if(!(state==ATL_REG_PREPARING || state==ATL_REG_READY || state==ATL_REG_SUBMITTING || state==ATL_REG_CODE_READY || state==ATL_REG_ENTERING_CODE)){ATLBackupExport(directory,job);return YES;}
   if(!ATLRegStep(state,ATL_REG_INTERRUPTED,&next)){ATLRegError(error,500,@"任务恢复失败");return NO;}
-  job[@"state"]=ATLRegName(next);for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip",@"code"]) [job removeObjectForKey:key];
-  return ATLRegSave(&store,job,error);
+  job[@"state"]=ATLRegName(next);for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip",@"code",@"pickup_api",@"country"]) [job removeObjectForKey:key];
+  if(!ATLRegSave(&store,job,error))return NO;ATLBackupExport(directory,job);return YES;
  } @finally {ATLRegClose(&store);}
 }
 
@@ -137,6 +143,6 @@ BOOL ATLRegistrationResumeVerification(NSString *directory,NSString *jobID,NSErr
  if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
  @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state,next;
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,ATL_REG_RESUME_VERIFICATION,&next)){ATLRegError(error,409,@"任务不在待核对状态");return NO;}
-  job[@"state"]=ATLRegName(next);return ATLRegSave(&store,job,error);
+  job[@"state"]=ATLRegName(next);if(!ATLRegSave(&store,job,error))return NO;ATLBackupExport(directory,job);return YES;
  } @finally {ATLRegClose(&store);}
 }

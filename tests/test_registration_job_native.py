@@ -17,3 +17,11 @@ class RegistrationJobNative(unittest.TestCase):
    p=subprocess.run(['clang','-fobjc-arc','-framework','Foundation',*[str(ROOT/f) for f in files],'-o',str(exe)],capture_output=True,text=True,timeout=60)
    self.assertEqual(p.returncode,0,p.stderr)
    p=subprocess.run([str(exe)],capture_output=True,text=True,timeout=10);self.assertEqual(p.returncode,0,p.stderr)
+
+ def test_offline_backup_survives_scrubbing(self):
+  with tempfile.TemporaryDirectory() as t:
+   exe=pathlib.Path(t)/'backup-test'
+   files=['tests/native_registration_backup.m','shared/ATLRegistrationJob.m']
+   p=subprocess.run(['clang','-fobjc-arc','-framework','Foundation',*[str(ROOT/f) for f in files],'-o',str(exe)],capture_output=True,text=True,timeout=60)
+   self.assertEqual(p.returncode,0,p.stderr)
+   p=subprocess.run([str(exe)],capture_output=True,text=True,timeout=10);self.assertEqual(p.returncode,0,p.stderr)
