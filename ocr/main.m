@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include "../shared/ATLOCRProtocol.h"
+#include "../shared/ATLOCRGeometry.h"
 
 // Theos SDK compatibility declarations, same runtime API as the existing bridge.
 @interface VNRecognizedText (ATLWorkerSDKCompat)
@@ -111,8 +112,11 @@ int main(int argc,char **argv) {
                 NSString *text=candidate.string;
                 if (!text.length || [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]>ATL_OCR_TEXT_LIMIT) continue;
                 CGRect box=observation.boundingBox;
-                [lines addObject:@{@"text":text,@"x":@(box.origin.x),@"y":@(1-box.origin.y-box.size.height),
-                    @"width":@(box.size.width),@"height":@(box.size.height),@"confidence":@(candidate.confidence)}];
+                double x=box.origin.x,y=1-box.origin.y-box.size.height;
+                double width=box.size.width,height=box.size.height;
+                if (!ATLClipVisionOCRBox(&x,&y,&width,&height)) continue;
+                [lines addObject:@{@"text":text,@"x":@(x),@"y":@(y),
+                    @"width":@(width),@"height":@(height),@"confidence":@(candidate.confidence)}];
             }
             result=ATLReply(requestID,YES,lines,nil,nil);
         } @catch (NSException *exception) {

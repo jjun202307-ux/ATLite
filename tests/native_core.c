@@ -5,6 +5,15 @@
 
 static int cancelled(void *context) { return *(int *)context; }
 int main(void) {
+    double vx=-0.0005035031820840881,vy=.06426293509347103,vw=.23685608278726034,vh=.02554389408656521;
+    assert(ATLClipVisionOCRBox(&vx,&vy,&vw,&vh));
+    assert(vx==0 && fabs(vw-.23635257960517625)<1e-12);
+    vx=-.01;vy=.2;vw=.2;vh=.1;
+    assert(ATLClipVisionOCRBox(&vx,&vy,&vw,&vh) && vx==0 && fabs(vw-.19)<1e-12);
+    vx=.9;vy=.95;vw=.2;vh=.1;
+    assert(ATLClipVisionOCRBox(&vx,&vy,&vw,&vh) && fabs(vw-.1)<1e-12 && fabs(vh-.05)<1e-12);
+    vx=1.1;vy=.2;vw=.1;vh=.1;assert(!ATLClipVisionOCRBox(&vx,&vy,&vw,&vh));
+    vx=NAN;assert(!ATLClipVisionOCRBox(&vx,&vy,&vw,&vh));
     double ox=-0.0004650982105789553,oy=.1,ow=.2,oh=.1;
     assert(ATLNormalizeOCRBox(&ox,&oy,&ow,&oh,828,1792));
     assert(ox==0 && fabs(ow-(.2-.0004650982105789553))<1e-10);
