@@ -1090,7 +1090,7 @@ static int l_ocrText(lua_State *L) {
 }
 // Short, interruptible interval between emitted keyboard characters.
 static void ATTypingPause(lua_State *L) {
-    unsigned int remaining=40+arc4random_uniform(61);
+    unsigned int remaining=40+arc4random_uniform(261);
     while(remaining) {
         ATCheckScript(L);
         unsigned int slice=remaining>20?20:remaining;
@@ -1098,6 +1098,29 @@ static void ATTypingPause(lua_State *L) {
         while(nanosleep(&req,&req)!=0 && errno==EINTR) ATCheckScript(L);
         remaining-=slice;
     }
+}
+static BOOL ATTypeASCIICharacter(uint16_t usage,int shift) {
+    BOOL ok=(!shift || ATASCIIKeyEvent(YES,0xe1));
+    if(ok)ok=ATASCIIKeyEvent(YES,usage);
+    if(ok)ok=ATASCIIKeyEvent(NO,usage);
+    if(shift)ok=ATASCIIKeyEvent(NO,0xe1) && ok;
+    return ok;
+}
+static BOOL ATTypingMaybeCorrect(lua_State *L,uint16_t usage,int shift) {
+    if(arc4random_uniform(10)!=0)return YES;
+    ATTypingPause(L);
+    BOOL ok=ATASCIIKeyEvent(YES,0x2a);
+    if(ok)ok=ATASCIIKeyEvent(NO,0x2a);
+    if(!ok)return NO;
+    ATTypingPause(L);
+    return ATTypeASCIICharacter(usage,shift);
+}
+static int l_inputBackspace(lua_State *L) {
+    ATCheckScript(L);
+    BOOL ok=ATASCIIKeyEvent(YES,0x2a);
+    if(ok)ok=ATASCIIKeyEvent(NO,0x2a);
+    if(!ok)return luaL_error(L,"backspace event failed");
+    lua_pushboolean(L,1);return 1;
 }
 static int l_inputText(lua_State *L) {
     size_t length=0; const unsigned char *text=(const unsigned char *)luaL_checklstring(L,1,&length);
@@ -1108,10 +1131,8 @@ static int l_inputText(lua_State *L) {
     if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent) return luaL_error(L,"inputText: HID keyboard unavailable");
     for (size_t i=0; i<length; i++) {
         ATCheckScript(L);
-        BOOL ok=(!shifts[i] || ATASCIIKeyEvent(YES,0xe1));
-        if (ok) ok=ATASCIIKeyEvent(YES,usages[i]);
-        if (ok) ok=ATASCIIKeyEvent(NO,usages[i]);
-        if (shifts[i]) ok=ATASCIIKeyEvent(NO,0xe1) && ok;
+        BOOL ok=ATTypeASCIICharacter(usages[i],shifts[i]);
+        if (ok) ok=ATTypingMaybeCorrect(L,usages[i],shifts[i]);
         if (!ok) return luaL_error(L,"inputText: event creation failed");
         if (i+1<length) ATTypingPause(L);
     }
@@ -1161,9 +1182,8 @@ static int l_inputRegistrationPassword(lua_State *L) {
     for(size_t i=0;i<length;i++) {
         uint16_t usage=0;int shift=0;ATCheckScript(L);
         if(!ATASCIIKey((unsigned char)gRegistrationPassword[i],&usage,&shift)) {ATClearRegistrationSecret();return luaL_error(L,"registration password unsupported");}
-        BOOL ok=(!shift || ATASCIIKeyEvent(YES,0xe1));
-        if(ok)ok=ATASCIIKeyEvent(YES,usage);if(ok)ok=ATASCIIKeyEvent(NO,usage);
-        if(shift)ok=ATASCIIKeyEvent(NO,0xe1) && ok;
+        BOOL ok=ATTypeASCIICharacter(usage,shift);
+        if(ok)ok=ATTypingMaybeCorrect(L,usage,shift);
         if(!ok){ATClearRegistrationSecret();return luaL_error(L,"keyboard event failed");}
         if(i+1<length) ATTypingPause(L);
     }
@@ -1183,7 +1203,8 @@ static int l_inputRegistrationCode(lua_State *L) {
     for(size_t i=0;i<length;i++){
         uint16_t usage=0;int shift=0;ATCheckScript(L);
         if(!ATASCIIKey((unsigned char)gRegistrationCode[i],&usage,&shift) || shift){ATClearRegistrationCode();return luaL_error(L,"registration code invalid");}
-        BOOL ok=ATASCIIKeyEvent(YES,usage);if(ok)ok=ATASCIIKeyEvent(NO,usage);
+        BOOL ok=ATTypeASCIICharacter(usage,shift);
+        if(ok)ok=ATTypingMaybeCorrect(L,usage,shift);
         if(!ok){ATClearRegistrationCode();return luaL_error(L,"keyboard event failed");}
         if(i+1<length) ATTypingPause(L);
     }
@@ -1317,6 +1338,7 @@ static const luaL_Reg ATLuaFuncs[] = {
     {"vibrate",        l_notImplemented},
     {"openURL",        l_notImplemented},
     {"inputText",      l_inputText},
+    {"inputBackspace", l_inputBackspace},
     {"toast",          l_notImplemented},
     {NULL, NULL},
 };

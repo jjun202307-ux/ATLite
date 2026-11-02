@@ -63,19 +63,25 @@ class RuntimeContracts(unittest.TestCase):
         self.assertIn('ATLEmailFinishJob',SRC)
         self.assertIn('ATRecognizeScreen',SRC)
 
-    def test_keyboard_typing_pauses_are_interruptible_and_not_clipboard(self):
+    def test_keyboard_typing_pauses_and_corrections(self):
         self.assertIn('ATTypingPause', SRC)
         for name in ('l_inputText', 'l_inputRegistrationPassword', 'l_inputRegistrationCode'):
             body=SRC[SRC.index('static int '+name):]
             body=body[:body.index('\n}')]
-            self.assertIn('ATASCIIKeyEvent(YES', body)
-            self.assertIn('ATASCIIKeyEvent(NO', body)
+            self.assertIn('ATTypeASCIICharacter', body)
+            self.assertIn('ATTypingMaybeCorrect(L', body)
             self.assertIn('ATTypingPause(L)', body)
             self.assertNotIn('UIPasteboard', body)
         helper=SRC[SRC.index('static void ATTypingPause'):]
         helper=helper[:helper.index('\n}')]
-        self.assertIn('arc4random_uniform', helper)
+        self.assertIn('40+arc4random_uniform(261)', helper)
         self.assertIn('ATCheckScript(L)', helper)
+        correction=SRC[SRC.index('static BOOL ATTypingMaybeCorrect'):]
+        correction=correction[:correction.index('\n}')]
+        self.assertIn('arc4random_uniform(10)', correction)
+        self.assertIn('ATASCIIKeyEvent(YES,0x2a)', correction)
+        self.assertIn('ATASCIIKeyEvent(NO,0x2a)', correction)
+        self.assertIn('ATTypeASCIICharacter(usage,shift)', correction)
 
     def test_native_buffers_freed_before_lua_tables(self):
         for name in ['l_findColor','l_findImage']:
