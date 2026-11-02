@@ -98,6 +98,12 @@ jobs:
           xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=14.0 -fobjc-arc -framework Foundation tests/native_registration_backup.m shared/ATLRegistrationJob.m -o packages/ATLBackupSelfTest
           ldid -Sprobe/entitlements.plist packages/ATLBackupSelfTest
 
+      - name: Build isolated touch diagnostic
+        run: |
+          set -eux
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=14.0 tests/diagnostic_home_swipe.c -o packages/ATLHomeSwipeTest
+          ldid -Stests/diagnostic_swipe_entitlements.plist packages/ATLHomeSwipeTest
+
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
@@ -105,3 +111,4 @@ jobs:
           path: |
             packages/*.deb
             packages/ATLBackupSelfTest
+            packages/ATLHomeSwipeTest
