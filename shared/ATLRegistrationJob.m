@@ -71,7 +71,7 @@ NSDictionary *ATLRegistrationCreate(NSString *directory,NSDictionary *payload,NS
  ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return nil;
  @try {struct stat st;if(fstatat(store.dirfd,"registration-job.json",&st,AT_SYMLINK_NOFOLLOW)==0){ATLRegError(error,409,@"已有任务，请先核对");return nil;}if(errno!=ENOENT){ATLRegError(error,500,@"任务目录不可读取");return nil;}
   if(payload[@"pickup_api"] && !ATLBackupCapture(directory,payload)){ATLRegError(error,500,@"本机备份未保存，任务未接收");return nil;}
-  NSMutableDictionary *job=[payload mutableCopy];job[@"state"]=@"pending";if(!ATLRegSave(&store,job,error))return nil;ATLBackupExport(directory,job);return ATLRegPublic(job);
+  NSMutableDictionary *job=[payload mutableCopy];job[@"state"]=@"pending";job[@"usernameFilled"]=@NO;if(!ATLRegSave(&store,job,error))return nil;ATLBackupExport(directory,job);return ATLRegPublic(job);
  } @finally {ATLRegClose(&store);}
 }
 NSDictionary *ATLRegistrationStatus(NSString *directory,NSString *jobID,NSError **error){
@@ -82,7 +82,7 @@ static NSDictionary *ATLRegClaim(NSString *directory,NSString *jobID,NSError **e
  if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return nil;
  @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || (jobID && !ATLRegMatch(job,jobID,error)))return nil;ATLRegState state,next;
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,ATL_REG_CLAIM,&next)){ATLRegError(error,409,@"任务不能重复领取");return nil;}
-  NSMutableDictionary *p=[job mutableCopy];[p removeObjectForKey:@"state"];if(!ATLRegValidPayload(p)){ATLRegError(error,500,@"任务资料无效");return nil;}
+  NSMutableDictionary *p=[job mutableCopy];[p removeObjectForKey:@"state"];[p removeObjectForKey:@"usernameFilled"];if(!ATLRegValidPayload(p)){ATLRegError(error,500,@"任务资料无效");return nil;}
   job[@"state"]=ATLRegName(next);if(!ATLRegSave(&store,job,error))return nil;ATLBackupExport(directory,job);return [job copy];
  } @finally {ATLRegClose(&store);}
 }
@@ -95,10 +95,20 @@ BOOL ATLRegistrationAdvance(NSString *directory,NSString *jobID,ATLRegEvent even
  @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;ATLRegState state,next;
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,event,&next)){ATLRegError(error,409,@"任务阶段不允许此操作");return NO;}
   job[@"state"]=ATLRegName(next);
+  if(event==ATL_REG_FIELDS_READY)job[@"usernameFilled"]=@YES; // Compatibility with older form scripts.
   if(next==ATL_REG_REVIEW || next==ATL_REG_ERROR || next==ATL_REG_DONE || next==ATL_REG_WAIT_CODE)
    for(NSString *key in @[@"password",@"email",@"username",@"fullName",@"zip",@"code",@"pickup_api",@"country"]) [job removeObjectForKey:key];
   if(!ATLRegSave(&store,job,error))return NO;ATLBackupExport(directory,job);return YES;
  } @finally {ATLRegClose(&store);}
+}
+
+BOOL ATLRegistrationUsernameFilled(NSString *directory,NSString *jobID,NSError **error){
+ if(error)*error=nil;ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
+ @try{NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;
+  if(![job[@"state"] isEqual:@"preparing"]){ATLRegError(error,409,@"用户名反馈阶段不匹配");return NO;}
+  job[@"usernameFilled"]=@YES;if(!ATLRegSave(&store,job,error))return NO;
+  if(!ATLBackupExport(directory,job)){ATLRegError(error,500,@"用户名反馈尚未保存，停止提交");return NO;}return YES;
+ }@finally{ATLRegClose(&store);}
 }
 
 BOOL ATLRegistrationClear(NSString *directory,NSString *jobID,NSError **error){

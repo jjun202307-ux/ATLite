@@ -11,7 +11,14 @@ int main(void){@autoreleasepool{
  assert([fm createDirectoryAtPath:files withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil]);
  NSDictionary *p=@{@"id":@"offline-test",@"username":@"dummy_user",@"email":@"dummy@example.invalid",@"password":@"Aa1!",@"fullName":@"Test User",@"zip":@"02203",@"pickup_api":@"https://example.invalid/mail",@"country":@"美国"};
  NSError *e=nil;assert(ATLRegistrationCreate(jobs,p,&e));
- assert(ATLRegistrationClaimPending(jobs,&e));assert(ATLRegistrationAdvance(jobs,p[@"id"],ATL_REG_FIELDS_READY,&e));
+ assert(ATLRegistrationClaimPending(jobs,&e));
+ NSString *early=[NSString stringWithContentsOfFile:[files stringByAppendingPathComponent:@"results.txt"] encoding:NSUTF8StringEncoding error:nil];assert(![early containsString:@"----注册中----"] && ![early hasPrefix:@"dummy_user----"]);
+ assert(ATLRegistrationUsernameFilled(jobs,p[@"id"],&e));
+ NSString *filled=[NSString stringWithContentsOfFile:[files stringByAppendingPathComponent:@"results.txt"] encoding:NSUTF8StringEncoding error:nil];assert([filled hasPrefix:@"dummy_user----"] && [filled containsString:@"----注册中----"]);
+ NSString *feedbackPath=[files stringByAppendingPathComponent:@"account-feedback.json"];
+ NSString *feedback=[NSString stringWithContentsOfFile:feedbackPath encoding:NSUTF8StringEncoding error:nil];assert([feedback containsString:@"username"] && [feedback containsString:@"dummy_user"] && ![feedback containsString:@"Aa1!"] && ![feedback containsString:@"https://example.invalid/mail"]);
+ assert(ATLRegistrationStatus(jobs,p[@"id"],&e));assert([[NSString stringWithContentsOfFile:feedbackPath encoding:NSUTF8StringEncoding error:nil] isEqual:feedback]); // unchanged snapshots keep the same revision
+ assert(ATLRegistrationAdvance(jobs,p[@"id"],ATL_REG_FIELDS_READY,&e));
  // Simulate unavailable Files storage at the instant the job ends.
  NSString *moved=[root stringByAppendingPathComponent:@"saved-files"];assert([fm moveItemAtPath:files toPath:moved error:nil]);
  assert(ATLRegistrationAdvance(jobs,p[@"id"],ATL_REG_INTERRUPTED,&e));

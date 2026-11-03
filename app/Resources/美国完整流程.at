@@ -786,6 +786,7 @@ tap(eyeX,eyeY);msleep(700)
 focusField(pass,'password');__atl_screen_context='password';inputRegistrationPassword();msleep(700)
 tap(eyeX,eyeY);msleep(700)
 inputField('username',job.username,0.60)
+registrationStage('username_filled')
 local zip=exact('zip code');if not zip then error('ZIP字段未确认') end
 local zy=focusField(zip,'zip code')
 local keys=us_locate_numeric_keypad(scan(),screenWidth(),screenHeight(),getColor);if not keys then error('数字键盘未确认') end

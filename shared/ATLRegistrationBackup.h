@@ -31,10 +31,23 @@ static inline BOOL ATLBackupCapture(NSString *directory,NSDictionary *payload){
  }@finally{ATLRegClose(&s);}
 }
 // Failure leaves the private archive intact; Status/Recover retry without rerunning UI.
+static BOOL ATLFeedbackSave(ATLRegStore *out,NSDictionary *entry){
+ NSMutableDictionary *all=[NSMutableDictionary dictionary];int fd=openat(out->dirfd,"account-feedback.json",O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+ if(fd>=0){struct stat st;if(!ATLRegPrivateFile(fd) || fstat(fd,&st)!=0 || st.st_size<0 || st.st_size>2000000){close(fd);return NO;}NSMutableData *data=[NSMutableData data];unsigned char b[4096];for(;;){ssize_t n=read(fd,b,sizeof b);if(n<0 && errno==EINTR)continue;if(n<0 || data.length+(n>0?(NSUInteger)n:0)>2000000){close(fd);return NO;}if(!n)break;[data appendBytes:b length:(NSUInteger)n];}close(fd);id parsed=[NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil];if(![parsed isKindOfClass:NSDictionary.class])return NO;all=[parsed mutableCopy];}else if(errno!=ENOENT)return NO;
+ NSString *key=[entry[@"email"] lowercaseString];NSDictionary *old=all[key];NSMutableDictionary *previous=[old isKindOfClass:NSDictionary.class]?[old mutableCopy]:nil;[previous removeObjectForKey:@"revision"];[previous removeObjectForKey:@"updated_at"];
+ if([previous isEqual:entry])return YES;
+ NSMutableDictionary *next=[entry mutableCopy];next[@"revision"]=@([old[@"revision"] unsignedLongLongValue]+1);
+ NSISO8601DateFormatter *iso=[NSISO8601DateFormatter new];next[@"updated_at"]=[iso stringFromDate:NSDate.date];all[key]=next;
+ NSData *data=[NSJSONSerialization dataWithJSONObject:all options:0 error:nil];if(!data || data.length>2000000)return NO;
+ NSString *tmp=[@".feedback-" stringByAppendingString:NSUUID.UUID.UUIDString];fd=openat(out->dirfd,tmp.UTF8String,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return NO;
+ BOOL ok=ATLRegPrivateFile(fd);size_t done=0;while(ok && done<data.length){ssize_t n=write(fd,(const char *)data.bytes+done,data.length-done);if(n<0 && errno==EINTR)continue;if(n<=0){ok=NO;break;}done+=(size_t)n;}if(ok)ok=fsync(fd)==0;if(close(fd)!=0)ok=NO;if(ok)ok=renameat(out->dirfd,tmp.UTF8String,out->dirfd,"account-feedback.json")==0;if(!ok){unlinkat(out->dirfd,tmp.UTF8String,0);return NO;}return fsync(out->dirfd)==0;
+}
 static BOOL ATLBackupExport(NSString *directory,NSDictionary *job){
  NSString *state=job[@"state"];
  NSDictionary *labels=@{@"pending":@"待手机处理",@"preparing":@"注册中",@"ready":@"注册中",@"submitting":@"注册中",@"code_ready":@"注册中",@"entering_code":@"注册中",@"review":@"待核对",@"error":@"失败",@"done":@"完成",@"wait_code":@"等待验证码"};
  NSString *label=[state isEqual:@"sms_required"]?@"需要接短信码":labels[state];if(!label)return YES;
+ BOOL usernameKnown=job[@"usernameFilled"]?[job[@"usernameFilled"] boolValue]:![@[@"pending",@"preparing"] containsObject:state];
+ if([state isEqual:@"preparing"] && !usernameKnown)label=@"待手机处理";
  NSString *archive=ATLBackupDirectory(directory,job[@"id"]);struct stat st;
  if(lstat(archive.fileSystemRepresentation,&st)!=0)return errno==ENOENT; // Legacy jobs had no archive.
  ATLRegStore s;if(!ATLRegOpen(&s,archive.fileSystemRepresentation))return NO;
@@ -44,9 +57,9 @@ static BOOL ATLBackupExport(NSString *directory,NSDictionary *job){
   BOOL completed=[state isEqual:@"done"] || [state isEqual:@"sms_required"];
   if(completed && !p[@"completed"]){
    NSDateFormatter *f=[NSDateFormatter new];f.locale=[[NSLocale alloc]initWithLocaleIdentifier:@"en_US_POSIX"];f.dateFormat=@"yyyy/MM/dd HH:mm";
-   p[@"completed"]=[f stringFromDate:NSDate.date];if(!ATLBackupSave(&s,p))return NO;
+   p[@"completed"]=[f stringFromDate:NSDate.date];p[@"completedUTC"]=[[NSISO8601DateFormatter new] stringFromDate:NSDate.date];if(!ATLBackupSave(&s,p))return NO;
   }
-  NSString *line=[[@[p[@"username"],p[@"email"],p[@"password"],p[@"pickup_api"],p[@"country"],label,completed?(p[@"completed"]?:@""):@""] componentsJoinedByString:@"----"] stringByAppendingString:@"\n"];
+  NSString *line=[[@[usernameKnown?p[@"username"]:@"",p[@"email"],p[@"password"],p[@"pickup_api"],p[@"country"],label,completed?(p[@"completed"]?:@""):@""] componentsJoinedByString:@"----"] stringByAppendingString:@"\n"];
   NSString *files=[[[directory stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Local/Files"] stringByResolvingSymlinksInPath];
   ATLRegStore out;if(!ATLRegOpen(&out,files.fileSystemRepresentation))return NO;
   @try{
@@ -70,7 +83,8 @@ static BOOL ATLBackupExport(NSString *directory,NSDictionary *job){
    }
    NSMutableString *updated=[NSMutableString string];
    for(NSString *key in order)[updated appendFormat:@"%@\n",latest[key]];
-   if([updated isEqual:old])return YES;
+   NSDictionary *feedback=@{@"job_id":p[@"id"],@"email":p[@"email"],@"username":usernameKnown?p[@"username"]:@"",@"status":label,@"completed_at":completed?(p[@"completedUTC"]?:@""):@""};
+   if([updated isEqual:old])return ATLFeedbackSave(&out,feedback);
    all=[[updated dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
    if(!all || all.length>16*1024*1024)return NO;
    NSString *temp=[@".result-" stringByAppendingString:NSUUID.UUID.UUIDString];
@@ -78,7 +92,7 @@ static BOOL ATLBackupExport(NSString *directory,NSDictionary *job){
    BOOL ok=ATLRegPrivateFile(fd);size_t done=0;while(ok && done<all.length){ssize_t n=write(fd,(const char *)all.bytes+done,all.length-done);if(n<0 && errno==EINTR)continue;if(n<=0){ok=NO;break;}done+=(size_t)n;}
    if(ok && fsync(fd)!=0)ok=NO;if(close(fd)!=0)ok=NO;
    if(ok)ok=renameat(out.dirfd,temp.UTF8String,out.dirfd,"results.txt")==0;
-   if(!ok){unlinkat(out.dirfd,temp.UTF8String,0);return NO;}return fsync(out.dirfd)==0;
+   if(!ok){unlinkat(out.dirfd,temp.UTF8String,0);return NO;}return fsync(out.dirfd)==0 && ATLFeedbackSave(&out,feedback);
   }@finally{ATLRegClose(&out);}
  }@finally{ATLRegClose(&s);}
 }
