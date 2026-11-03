@@ -142,13 +142,19 @@ static NSString *ATLFilesDirectory(void) {
     // M3：目录必须先建（fresh 环境下 tweak %ctor 可能还没跑过，copy 静默失败即 R9 落空）
     [[NSFileManager defaultManager] createDirectoryAtPath:ATLScriptsDir()
                               withIntermediateDirectories:YES attributes:nil error:nil];
-    for (NSString *name in @[@"test", @"email_roundtrip"]) {
+    for (NSString *name in @[@"test", @"email_roundtrip", @"美国完整流程"]) {
         NSString *target = [ATLScriptsDir() stringByAppendingPathComponent:[name stringByAppendingPathExtension:@"at"]];
         if ([[NSFileManager defaultManager] fileExistsAtPath:target]) continue;
         NSString *bundled = [[NSBundle mainBundle] pathForResource:name ofType:@"at"];
         NSError *error = nil;
         if (bundled && ![[NSFileManager defaultManager] copyItemAtPath:bundled toPath:target error:&error])
             NSLog(@"[ATLite] seed failed: %@", error);
+    }
+    NSString *bundledImages=[[NSBundle mainBundle].resourcePath stringByAppendingPathComponent:@"PhoneImages"];
+    for(NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:bundledImages error:nil]){
+        NSString *target=[ATLImagesDir() stringByAppendingPathComponent:name];
+        if(![NSFileManager.defaultManager fileExistsAtPath:target])
+            [NSFileManager.defaultManager copyItemAtPath:[bundledImages stringByAppendingPathComponent:name] toPath:target error:nil];
     }
 }
 
@@ -231,6 +237,7 @@ static NSString *ATLFilesDirectory(void) {
         if ([ext isEqualToString:@"at"] || [ext isEqualToString:@"lua"]) [self.scripts addObject:f];
     }
     [self.scripts sortUsingSelector:@selector(compare:)];
+    if([self.scripts containsObject:@"美国完整流程.at"]){[self.scripts removeObject:@"美国完整流程.at"];[self.scripts insertObject:@"美国完整流程.at" atIndex:0];}
     [self.tableView reloadData];
 }
 
@@ -245,6 +252,9 @@ static NSString *ATLFilesDirectory(void) {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:id];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:id];
     cell.textLabel.text = self.scripts[indexPath.row];
+    BOOL full=[cell.textLabel.text isEqual:@"美国完整流程.at"];
+    cell.textLabel.font=full?[UIFont boldSystemFontOfSize:18]:[UIFont systemFontOfSize:17];
+    cell.textLabel.textColor=full?UIColor.systemBlueColor:UIColor.labelColor;
     return cell;
 }
 

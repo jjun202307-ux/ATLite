@@ -2,7 +2,8 @@
 #import "../shared/ATLJBRootPath.h"
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
-// ATLiteTweak v0.3.30 — AutoTouch-style script runner (Dopamine roothide only)
+#import "../shared/ATLPhoneFlow.h"
+// ATLiteTweak v0.3.31 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -189,6 +190,7 @@ static volatile int32_t gRunningScripts = 0;
 
 // Monotonic wall budget shared only with the one admitted worker.
 static double gScriptDeadline = 0;
+static BOOL gPhoneFlowStarted = NO;
 static double ATMonotonicNow(void) {
     static mach_timebase_info_data_t tb;
     static dispatch_once_t once;
@@ -1182,7 +1184,7 @@ static int l_getRegistrationJob(lua_State *L) {
     // Screen typing at 100..500ms per key needs a bounded registration budget.
     // It is granted once by the atomic pending-job claim; ordinary scripts keep 60s.
     lua_getglobal(L,"__atl_screen_type");
-    if(lua_isfunction(L,-1))gScriptDeadline=ATMonotonicNow()+180.0;
+    if(lua_isfunction(L,-1) && !gPhoneFlowStarted)gScriptDeadline=ATMonotonicNow()+180.0;
     lua_pop(L,1);
     lua_createtable(L,0,5);
     lua_pushstring(L,identifier);lua_setfield(L,-2,"jobId");
@@ -1320,15 +1322,30 @@ static int l_failEmailJob(lua_State *L) {
     lua_pushboolean(L,ok); return 1;
 }
 
+static int l_phoneFlow(lua_State *L) {
+    ATCheckScript(L);
+    NSString *action=[NSString stringWithUTF8String:luaL_checkstring(L,1)];
+    NSInteger stage=lua_isnoneornil(L,2)?0:(NSInteger)luaL_checkinteger(L,2);
+    if(stage<0 || stage>32)return luaL_error(L,"invalid phone flow stage");
+    NSError *error=nil;
+    NSDictionary *reply=ATLPhoneFlow(ATBaseDir(),action,stage,^{return ATShouldStop() || ATScriptExpired();},&error);
+    if(!reply)return luaL_error(L,"phone flow: %s",(error.localizedDescription?:@"operation failed").UTF8String);
+    if([action isEqual:@"begin"] && !gPhoneFlowStarted){gPhoneFlowStarted=YES;gScriptDeadline=ATMonotonicNow()+1800.0;}
+    lua_createtable(L,0,(int)reply.count);
+    for(NSString *key in reply){id value=reply[key];if([value isKindOfClass:NSString.class])lua_pushstring(L,[value UTF8String]);else if([value isKindOfClass:NSNumber.class])lua_pushinteger(L,[value longLongValue]);else continue;lua_setfield(L,-2,key.UTF8String);}
+    return 1;
+}
+
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.30 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.31 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
 }
 
 static const luaL_Reg ATLuaFuncs[] = {
+    {"phoneFlow", l_phoneFlow},
     {"touchDown", l_touchDown},
     {"touchMove", l_touchMove},
     {"touchUp",   l_touchUp},
@@ -1567,6 +1584,7 @@ static void ATPlayLuaFile(NSString *scriptPath) {
     @try {
         gClaimedJobID[0]=gClaimedEmail[0]=0;gRegistrationID[0]=0;ATClearRegistrationSecret();ATClearRegistrationCode();
         ATWriteStatus(YES, scriptPath.lastPathComponent);
+        gPhoneFlowStarted = NO;
         gScriptDeadline = ATMonotonicNow() + AT_SCRIPT_TIMEOUT_SEC;
         L = lua_newstate(ATLuaAllocator, &budget);
         if (!L) { ATLog(@"Lua VM allocation failed"); return; }
@@ -1828,7 +1846,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.30 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.31 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

@@ -34,18 +34,19 @@ static BOOL ATLBackupCapture(NSString *directory,NSDictionary *payload){
 static BOOL ATLBackupExport(NSString *directory,NSDictionary *job){
  NSString *state=job[@"state"];
  NSDictionary *labels=@{@"pending":@"待手机处理",@"preparing":@"注册中",@"ready":@"注册中",@"submitting":@"注册中",@"code_ready":@"注册中",@"entering_code":@"注册中",@"review":@"待核对",@"error":@"失败",@"done":@"完成",@"wait_code":@"等待验证码"};
- NSString *label=labels[state];if(!label)return YES;
+ NSString *label=[state isEqual:@"sms_required"]?@"需要接短信码":labels[state];if(!label)return YES;
  NSString *archive=ATLBackupDirectory(directory,job[@"id"]);struct stat st;
  if(lstat(archive.fileSystemRepresentation,&st)!=0)return errno==ENOENT; // Legacy jobs had no archive.
  ATLRegStore s;if(!ATLRegOpen(&s,archive.fileSystemRepresentation))return NO;
  @try{
   NSMutableDictionary *p=[ATLBackupRead(&s) mutableCopy];if(!p || ![p[@"id"] isEqual:job[@"id"]])return NO;
   for(NSString *k in @[@"username",@"email",@"password",@"pickup_api",@"country"])if(!ATLBackupField(p[k],4096))return NO;
-  if([state isEqual:@"done"] && !p[@"completed"]){
+  BOOL completed=[state isEqual:@"done"] || [state isEqual:@"sms_required"];
+  if(completed && !p[@"completed"]){
    NSDateFormatter *f=[NSDateFormatter new];f.locale=[[NSLocale alloc]initWithLocaleIdentifier:@"en_US_POSIX"];f.dateFormat=@"yyyy/MM/dd HH:mm";
    p[@"completed"]=[f stringFromDate:NSDate.date];if(!ATLBackupSave(&s,p))return NO;
   }
-  NSString *line=[[@[p[@"username"],p[@"email"],p[@"password"],p[@"pickup_api"],p[@"country"],label,[state isEqual:@"done"]?(p[@"completed"]?:@""):@""] componentsJoinedByString:@"----"] stringByAppendingString:@"\n"];
+  NSString *line=[[@[p[@"username"],p[@"email"],p[@"password"],p[@"pickup_api"],p[@"country"],label,completed?(p[@"completed"]?:@""):@""] componentsJoinedByString:@"----"] stringByAppendingString:@"\n"];
   NSString *files=[[[directory stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Local/Files"] stringByResolvingSymlinksInPath];
   ATLRegStore out;if(!ATLRegOpen(&out,files.fileSystemRepresentation))return NO;
   @try{

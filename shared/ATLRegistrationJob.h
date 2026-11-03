@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import "ATLRegistrationState.h"
+FOUNDATION_EXPORT BOOL ATLRegistrationPayloadValid(NSDictionary *payload);
 FOUNDATION_EXPORT NSDictionary *ATLRegistrationCreate(NSString *directory, NSDictionary *payload, NSError **error);
 FOUNDATION_EXPORT NSDictionary *ATLRegistrationStatus(NSString *directory, NSString *jobID, NSError **error);
 FOUNDATION_EXPORT NSDictionary *ATLRegistrationClaimPending(NSString *directory, NSError **error);

@@ -1,0 +1,1343 @@
+-- 纯手机入口：无需电脑、USB或SSH。由generate_phone_flow.py生成。
+local parts={}
+parts['US_准备_AMG_定位']=function()
+-- 仅识别 AMG 菜单；不触发“原始机器”或“一键新机”。
+if screenWidth()~=414 or screenHeight()~=896 then error('屏幕尺寸与模板不匹配') end
+local function findOne(name,region)
+    local hits=findImage(name,0.75,region)
+    if not hits or #hits~=1 then error('AMG 模板没有唯一结果：'..name) end
+    return hits[1]
+end
+local new=findOne('PHONE_amg_new.png',{x=0,y=285,width=120,height=55})
+local original=findOne('PHONE_amg_original.png',{x=0,y=330,width=120,height=55})
+if math.abs(new[1]-original[1])>15 or original[2]-new[2]<30 or original[2]-new[2]>60 then
+    error('AMG 菜单布局不匹配')
+end
+log('AMG_MENU_CONFIRMED',new[1],new[2],new[3],original[1],original[2],original[3])
+
+end
+parts['US_准备_AMG执行_开发中']=function()
+-- 需要由调度器先打开 AMG；每次调用执行一轮，不在结果不明时重试。
+if screenWidth()~=414 or screenHeight()~=896 then error('设备尺寸不匹配') end
+local function locate(name,area)
+    local hits=findImage('PHONE_amg_'..name..'.png',0.75,area)
+    if not hits or #hits~=1 then error('AMG 菜单未确认：'..name) end
+    return hits[1]
+end
+-- AMG 会保留上次子页面；先通过左上角返回按钮恢复主菜单。
+local menu=findImage('PHONE_amg_original.png',0.75,{x=0,y=330,width=120,height=55})
+if not menu or #menu==0 then
+    local back=findText('AMG')
+    for _,p in ipairs(back or {}) do
+        if p[1]<100 and p[2]<100 then tap(p[1],p[2]);msleep(600);break end
+    end
+end
+local original=locate('original',{x=0,y=330,width=120,height=55})
+local new=locate('new',{x=0,y=285,width=120,height=55})
+if original[2]<=new[2] or math.abs(original[1]-new[1])>15 then error('AMG 菜单布局不符') end
+tap(original[1],original[2]);msleep(1200)
+new=locate('new',{x=0,y=285,width=120,height=55})
+tap(new[1],new[2])
+log('AMG_ACTION_SENT')
+
+end
+parts['US_准备_AMG监测_开发中']=function()
+-- AMG_BUSY_SEEN 由调度器传入；每次只观察，不再次点击。
+local absent=0
+local result=nil
+for i=1,25 do
+    local popup=findImage('PHONE_amg_error_pc.png',0.75,{x=115,y=425,width=185,height=115})
+    if popup and #popup>0 then result='AMG_ERROR';break end
+    local hits=findImage('PHONE_amg_busy_pc.png',0.75,{x=150,y=375,width=115,height=130})
+    local busy=hits and #hits>0
+    if busy then AMG_BUSY_SEEN=true;absent=0
+    else
+        absent=absent+1
+        local menu=findImage('PHONE_amg_new.png',0.75,{x=0,y=285,width=120,height=55})
+        if absent>=(AMG_BUSY_SEEN and 2 or 3) and menu and #menu==1 then result='AMG_DONE';break end
+        if not menu or #menu==0 then
+            local home=findImage('PHONE_launch_settings.png',0.75,{x=0,y=240,width=125,height=130})
+            if home and #home==1 then result='AMG_LEFT_TO_HOME';break end
+        end
+    end
+    msleep(800)
+end
+if not result then result=AMG_BUSY_SEEN and 'AMG_WAIT_MORE_BUSY' or 'AMG_WAIT_MORE' end
+log(result)
+
+end
+parts['US_准备_AppStore下载_开发中']=function()
+-- 调度器先执行搜索脚本；只点击一次下载，安装结果由系统应用列表核实。
+local name=findText('Vinted: Pre-loved')
+local developer=findText('Vinted Limited')
+if not name or #name~=1 or not developer or #developer~=1 or math.abs(name[1][2]-developer[1][2])>110 then
+    error('App Store 应用名称与开发者不匹配')
+end
+local h=findImage('PHONE_store_cloud.png',0.75,{x=330,y=530,width=75,height=75})
+if not h or #h~=1 or math.abs(h[1][2]-name[1][2])>30 then error('Vinted 下载入口不明确') end
+tap(h[1][1],h[1][2]);msleep(1500)
+log('VINTED_DOWNLOAD_REQUESTED_VERIFY_INSTALLATION')
+
+end
+parts['US_准备_AppStore安装']=function()
+local function scan() return ocrText() end
+local function searchField()
+    for _,b in ipairs(scan()) do if (b.text or ''):lower():find('games, apps, stories',1,true) then return b end end
+end
+local b=searchField()
+if not b then
+    local hits=findText('Search');local tab=nil
+    for _,v in ipairs(hits or {}) do if v[2]>800 then tab=v end end
+    if not tab then error('App Store 搜索入口未找到') end
+    tap(tab[1],tab[2]);msleep(700);b=searchField()
+end
+if not b then error('App Store 搜索框未找到') end
+tap(b.x+b.width/2,b.y+b.height/2);msleep(600)
+if screenWidth()~=414 or screenHeight()~=896 then error('键盘尺寸未确认') end
+local searchKey=findText('search');local keyboard=false
+for _,q in ipairs(searchKey or {}) do if q[2]>600 then keyboard=true end end
+if not keyboard then error('搜索键盘未显示') end
+for _,q in ipairs({{207,737},{309,625},{289,737},{187,625},{104,625},{125,681}}) do tap(q[1],q[2]);msleep(math.random(80,150)) end
+msleep(500)
+local key=nil
+for _,v in ipairs(scan()) do if (v.text or ''):lower()=='search' and v.y>600 then key=v end end
+if not key then error('搜索键未找到') end
+tap(key.x+key.width/2,key.y+key.height/2);msleep(2500)
+local names=findText('Vinted: Pre-loved');local dev=findText('Vinted Limited');local chosen=nil
+for _,v in ipairs(names or {}) do if not chosen or v[2]<chosen[2] then chosen=v end end
+if not chosen or not dev or #dev<1 then error('Vinted 名称或开发者未找到') end
+local cloud=findImage('PHONE_store_cloud.png',0.75,{x=330,y=math.max(0,chosen[2]-40),width=80,height=80})
+if not cloud or #cloud~=1 then error('Vinted 下载按钮未找到') end
+tap(cloud[1][1],cloud[1][2]);msleep(800)
+
+end
+parts['US_准备_AppStore搜索']=function()
+-- 从 App Store 搜索页查找 Vinted；只搜索并核验，不触发安装。
+local function matching(needle)
+    local result={}
+    for _,b in ipairs(ocrText()) do
+        if (b.text or ''):lower():find(needle,1,true) then result[#result+1]=b end
+    end
+    return result
+end
+local fields=matching('games, apps, stories')
+if #fields~=1 then error('App Store 搜索框不唯一；停止') end
+local field=fields[1]
+tap(field.x+field.width/2,field.y+field.height/2)
+msleep(500)
+for _,q in ipairs({{207,737},{309,625},{289,737},{187,625},{104,625},{125,681}}) do tap(q[1],q[2]);msleep(math.random(80,150)) end
+msleep(500)
+local keys={}
+for _,b in ipairs(ocrText()) do
+    if (b.text or ''):lower()=='search' and b.y>screenHeight()*0.65 then keys[#keys+1]=b end
+end
+if #keys~=1 then error('键盘搜索键不唯一；停止') end
+local key=keys[1]
+tap(key.x+key.width/2,key.y+key.height/2)
+msleep(3500)
+local names=matching('vinted: pre-loved')
+local developers=matching('vinted limited')
+if #names<1 or #developers<1 then error('搜索结果未同时识别到目标名称与开发者') end
+log('US_APPSTORE_SEARCH_OK',#names,#developers)
+
+end
+parts['US_准备_Safari清理_开发中']=function()
+-- 调度器先打开 Safari 设置页；执行一次清理。屏幕位置变化时停止。
+local function oneText(text)
+    local h=findText(text)
+    if not h or #h~=1 then error('页面文字不唯一：'..text) end
+    return h[1]
+end
+local found=nil
+for _=1,7 do
+    msleep(1400)
+    local h=findText('Clear History')
+    if h and #h==1 and h[1][2]>90 and h[1][2]<820 then found=h[1];break end
+    swipe(200,720,200,330,450)
+end
+if not found then error('Safari 清理入口未找到') end
+tap(found[1],found[2]);msleep(650)
+local buttons={}
+for _,b in ipairs(ocrText()) do
+    if (b.text or ''):lower():find('clear history and data',1,true) and b.y>650 then buttons[#buttons+1]=b end
+end
+if #buttons~=1 then error('Safari 清理确认不唯一') end
+local b=buttons[1];tap(b.x+b.width/2,b.y+b.height/2);msleep(1300)
+local close=findText('Close Tabs')
+if close and #close==1 and close[1][2]>650 then tap(close[1][1],close[1][2]);msleep(900) end
+log('SAFARI_CLEAR_REQUEST_COMPLETED')
+
+end
+parts['US_准备_Safari进入_开发中']=function()
+-- 打开设置后从当前列表位置进入 Safari；已在 Safari 时不重复进入。
+local function safariTitle()
+    local h=findText('Safari')
+    for _,p in ipairs(h or {}) do if p[2]<100 and p[1]>100 then return true end end
+    return false
+end
+if not safariTitle() then
+    -- 设置列表可保留上次滚动位置；点状态栏回到列表顶部后单向查找。
+    tap(screenWidth()/2,20);msleep(700)
+    local entered=false
+    for i=1,12 do
+        msleep(1000)
+        local h=findText('Safari');local row=nil
+        for _,p in ipairs(h or {}) do if p[2]>100 and p[2]<800 then row=p;break end end
+        if row then
+            msleep(1200)
+            h=findText('Safari');row=nil
+            for _,p in ipairs(h or {}) do if p[2]>100 and p[2]<800 then row=p;break end end
+            if not row then error('Safari 设置项滚动后已变化') end
+            tap(row[1],row[2]);msleep(1200);entered=safariTitle();break
+        end
+        swipe(200,720,200,350,450)
+    end
+    if not entered then error('无法进入 Safari 设置') end
+end
+
+end
+parts['US_准备_Vinted卸载菜单定位']=function()
+-- 检查主屏应用图标，打开长按菜单并定位移除入口；不点击删除。
+local w,h=screenWidth(),screenHeight()
+if w~=414 or h~=896 then error('当前屏幕尺寸与手机模板不匹配') end
+local icon=findImage('PHONE_vinted.png',0.75,{x=210,y=385,width=95,height=75})
+if not icon or #icon~=1 then error('未在预期主屏位置找到 Vinted') end
+local p=icon[1]
+touchDown(0,p[1],p[2]);msleep(1100);touchUp(0,p[1],p[2]);msleep(800)
+local menu=findImage('PHONE_remove_app.png',0.75,{x=40,y=530,width=160,height=75})
+if not menu or #menu~=1 then error('未确认 Vinted 移除菜单') end
+log('VINTED_REMOVE_MENU_CONFIRMED',menu[1][1],menu[1][2],menu[1][3])
+
+end
+parts['US_准备_卸载Vinted']=function()
+-- 主屏图标移动后以标签确定查找区域；每个确认框都核对目标应用。
+-- 调度器已经通过屏幕滑动回到主屏。
+local labels=findText('Vinted')
+if not labels or #labels~=1 then error('主屏 Vinted 标签未找到') end
+local x,y=labels[1][1],labels[1][2]
+local left=math.max(0,math.min(319,x-48))
+local icon=findImage('PHONE_vinted.png',0.75,{x=left,y=math.max(0,y-88),width=95,height=75})
+if not icon or #icon~=1 then error('Vinted 图标未找到') end
+local p=icon[1];touchDown(0,p[1],p[2]);msleep(1100);touchUp(0,p[1],p[2]);msleep(700)
+local remove=findText('Remove App')
+if not remove or #remove~=1 then error('移除菜单未找到') end
+tap(remove[1][1],remove[1][2]);msleep(700)
+local target=findText('Vinted');local action=findText('Delete App')
+if not target or #target<1 or not action or #action~=1 then error('删除应用确认不明确') end
+tap(action[1][1],action[1][2]);msleep(700)
+target=findText('Vinted');local options=findText('Delete');local final={}
+for _,v in ipairs(options or {}) do if v[1]>200 and v[2]>450 and v[2]<560 then final[#final+1]=v end end
+if not target or #target<1 or #final~=1 then error('最终删除确认不明确') end
+tap(final[1][1],final[1][2]);msleep(1500)
+
+end
+parts['US_准备_卸载Vinted_开发中']=function()
+-- 本机主屏布局适配。删除前每一层都核对当前画面，任何不明确都停止。
+if screenWidth()~=414 or screenHeight()~=896 then error('设备尺寸不匹配') end
+local function image(name,area)
+    local hits=findImage('PHONE_'..name..'.png',0.75,area)
+    if not hits or #hits~=1 then error('页面模板未确认：'..name) end
+    return hits[1]
+end
+local icon=image('vinted',{x=210,y=385,width=95,height=75})
+touchDown(0,icon[1],icon[2]);msleep(1100);touchUp(0,icon[1],icon[2]);msleep(800)
+local menu=image('remove_app',{x=40,y=530,width=160,height=75})
+tap(menu[1],menu[2]);msleep(800)
+local function target()
+    local h=findText('Vinted')
+    if not h or #h<1 then error('确认框缺少 Vinted 名称') end
+end
+target()
+local remove=image('delete_app',{x=120,y=430,width=170,height=60})
+tap(remove[1],remove[2]);msleep(800)
+target()
+local confirm=image('delete_confirm',{x=220,y=480,width=125,height=65})
+tap(confirm[1],confirm[2]);msleep(2000)
+log('VINTED_DELETE_SENT_VERIFY_INSTALLATION_STATE')
+
+end
+parts['US_准备_小火箭开启']=function()
+-- 只读取 UI；开关操作由调度器通过 tap 发出。
+local titles=findText('Shadowrocket');local title=false
+for _,p in ipairs(titles or {}) do if p[2]<100 then title=true end end
+if not title then error('不在小火箭页面') end
+local c=getColor(330,134);if type(c)~='number' then error('小火箭开关无法读取') end
+local on=((c&255)-((c>>16)&255))>=25
+local lines=ocrText();if not lines or #lines==0 then error('小火箭状态无法读取') end
+local pending=false
+for _,b in ipairs(lines) do
+ if b.y>=95 and b.y<=160 then
+  local raw=b.text or '';local t=raw:lower()
+  if t:find('connecting',1,true) or t:find('not connected',1,true) or raw:find('连接中',1,true) or raw:find('未连接',1,true) then pending=true end
+ end
+end
+if not on then log('SHADOW_OFF') elseif pending then log('SHADOW_CONNECTING') else log('SHADOW_ON') end
+
+end
+parts['US_准备_注册页前置']=function()
+-- 先处理当前权限弹窗，不用 Home 打断系统弹窗。
+local handled=false
+local hits=findImage('PHONE_vinted_network_both.png',0.75,{x=90,y=440,width=235,height=70})
+if hits and #hits>1 then error('网络权限按钮匹配不唯一') end
+if hits and #hits==1 then
+    tap(hits[1][1],hits[1][2]);msleep(1800)
+    handled=true;log('VINTED_NETWORK_ALLOWED')
+end
+local fields={['fullname']=false,['username']=false,['email']=false,['password']=false,['zipcode']=false}
+local present=handled
+local permission=false
+for _,b in ipairs(ocrText()) do
+    local text=(b.text or ''):lower()
+    local norm=text:gsub('[%s%p]','')
+    if fields[norm]~=nil then fields[norm]=true end
+    if norm:find('signupforvinted',1,true) or norm:find('continuewithemail',1,true) then present=true end
+    if norm:find('wlanonly',1,true) or norm:find('wirelessdata',1,true) then permission=true end
+    if norm:find('sessionhasbeenblocked',1,true) then log('VINTED_SESSION_BLOCKED');error('session blocked') end
+end
+if permission then error('网络权限弹窗仍未关闭') end
+local ready=true
+for _,value in pairs(fields) do if not value then ready=false end end
+if ready then log('VINTED_FORM_READY') elseif present then log('VINTED_PAGE_PRESENT') else log('VINTED_PAGE_UNKNOWN') end
+
+end
+parts['US_准备_页面只读检查']=function()
+-- 准备阶段页面识别：只读取画面，不点击、不更改手机数据。
+log('US_PREPARATION_READONLY_BEGIN')
+local ok, blocks = pcall(ocrText)
+if not ok or type(blocks) ~= 'table' then error('屏幕或 OCR 不可用') end
+local markers = {safari=0, clear=0, amg=0, original=0, fresh=0, appstore=0}
+for _, b in ipairs(blocks) do
+    local s = tostring(b.text or ''):lower()
+    if s:find('safari', 1, true) then markers.safari=markers.safari+1 end
+    if s:find('clear history', 1, true) or s:find('清除历史', 1, true) then markers.clear=markers.clear+1 end
+    if s:find('amg', 1, true) then markers.amg=markers.amg+1 end
+    if s:find('原始机', 1, true) then markers.original=markers.original+1 end
+    if s:find('一键新', 1, true) then markers.fresh=markers.fresh+1 end
+    if s:find('app store', 1, true) then markers.appstore=markers.appstore+1 end
+end
+log('US_PREPARATION_SCREEN',screenWidth(),screenHeight(),
+    'safari',markers.safari,'clear',markers.clear,'amg',markers.amg,
+    'original',markers.original,'fresh',markers.fresh,'appstore',markers.appstore)
+log('US_PREPARATION_READONLY_END')
+
+end
+parts['home']=function()
+local function homeVisible()
+ local a=findText('App Store');local b=findText('Shadowrocket')
+ return a and #a>0 and b and #b>0
+end
+if not homeVisible() then
+ keyDown(KEY_TYPE.HOME_BUTTON);msleep(80)
+ keyUp(KEY_TYPE.HOME_BUTTON);msleep(1200)
+end
+if not homeVisible() then error('模拟 Home 键后未返回主屏') end
+end
+parts['close_apps']=function()
+for i=1,2 do
+ keyDown(KEY_TYPE.HOME_BUTTON);msleep(60);keyUp(KEY_TYPE.HOME_BUTTON);msleep(100)
+end
+msleep(700)
+for i=1,12 do
+ swipe(200,650,200,100,350);msleep(500)
+ local home=findImage('PHONE_launch_settings.png',0.75,{x=0,y=240,width=125,height=130})
+ if home and #home==1 then log('APP_SWITCHER_CLEARED_TO_HOME');return end
+end
+error('后台清理后未确认返回主屏')
+end
+parts['proxy_off']=function()
+local h=findText('Not Connected')
+if not h or #h~=1 then
+ local c=getColor(330,134)
+ if not c or ((c&255)-((c>>16)&255))<25 then error('小火箭状态不明确') end
+ tap(350,134);msleep(1200)
+ h=findText('Not Connected');if not h or #h~=1 then error('小火箭未关闭') end
+end
+end
+parts['open_form']=function()
+msleep(1000)
+local entry=nil
+for i=1,12 do
+ local blocked=findText('session has been blocked');if blocked and #blocked>0 then log('VINTED_SESSION_BLOCKED');error('session blocked') end
+ entry=findText('Sign up for Vinted');if entry and #entry==1 then break end
+ msleep(700)
+end
+if not entry or #entry~=1 then error('美国版注册入口未找到') end
+tap(entry[1][1],entry[1][2]);msleep(700)
+local email=nil
+for i=1,6 do email=findText('Continue with email');if email and #email==1 then break end;msleep(500) end
+if not email or #email~=1 then error('邮箱注册入口未找到') end
+tap(email[1][1],email[1][2]);msleep(800)
+local labels={['full name']=false,['username']=false,['email']=false,['password']=false,['zip code']=false}
+for _,b in ipairs(ocrText()) do local s=(b.text or ''):lower();if labels[s]~=nil then labels[s]=true end end
+for _,v in pairs(labels) do if not v then error('空白注册表单未确认') end end
+end
+parts['observe']=function()
+-- 只观察页面，不触摸人机验证控件。
+local human,blocked,phone,field,verify,email=false,false,false,false,false,false
+for _,b in ipairs(ocrText()) do
+ local text=(b.text or ''):lower()
+ local norm=text:gsub('[%s%p]','')
+ if text:find('human',1,true) and text:find('verify',1,true) then human=true end
+ if text:find('session has been blocked',1,true) then blocked=true end
+ if text:find('phone number',1,true) then phone=true end
+ if norm=='verify' then verify=true end
+ if text:find('verification code',1,true) or text:find('enter code',1,true) then field=true end
+ if text:find('email',1,true) or text:find('inbox',1,true) then email=true end
+end
+if blocked then log('PAGE_BLOCKED')
+elseif human then log('PAGE_HUMAN_VERIFICATION')
+elseif phone then log('PAGE_PHONE_VERIFICATION')
+elseif field and (verify or email) then log('PAGE_EMAIL_CODE')
+else log('PAGE_UNKNOWN') end
+
+end
+parts['fill']=function()
+-- 开发中：基于OCR锚点和多点图色验证数字键盘，只返回候选坐标，不发送触摸。
+-- 各次getColor不是同一冻结帧，因此只可作为受控测试，未通过完整真机负例前不接入注册。
+local function us_locate_numeric_keypad(blocks, width, height, get_color)
+    if type(blocks) ~= 'table' or type(width) ~= 'number' or type(height) ~= 'number' or type(get_color) ~= 'function' then return nil, '参数错误' end
+    local a = {}
+    for _, b in ipairs(blocks) do
+        local t = tostring(b.text or ''):gsub('%s','')
+        if t:match('^[1-9]$') and type(b.x)=='number' and type(b.y)=='number' and type(b.width)=='number' and type(b.height)=='number' and b.y > height*0.5 then
+            if a[t] then return nil, '数字锚点重复' end
+            a[t] = {b.x+b.width/2,b.y+b.height/2}
+        end
+    end
+    local anchors={}
+    for d=1,9 do
+        local point=a[tostring(d)]
+        if point then anchors[#anchors+1]={point[1],point[2],(d-1)%3,math.floor((d-1)/3)} end
+    end
+    if #anchors<5 then return nil, '数字锚点不足' end
+    local dxsum,dysum,dxcount,dycount=0,0,0,0
+    for i=1,#anchors do for j=i+1,#anchors do
+        local p,q=anchors[i],anchors[j]
+        if p[3]~=q[3] then dxsum=dxsum+(q[1]-p[1])/(q[3]-p[3]);dxcount=dxcount+1 end
+        if p[4]~=q[4] then dysum=dysum+(q[2]-p[2])/(q[4]-p[4]);dycount=dycount+1 end
+    end end
+    if dxcount==0 or dycount==0 then return nil, '锚点布局不足' end
+    local dx,dy=dxsum/dxcount,dysum/dycount
+    if dx<width*0.19 or dx>width*0.40 or dy<height*0.035 or dy>height*0.10 then return nil, '键盘间距不符合' end
+    local bx,by=0,0
+    for _,p in ipairs(anchors) do bx=bx+p[1]-p[3]*dx;by=by+p[2]-p[4]*dy end
+    bx,by=bx/#anchors,by/#anchors
+    for _,p in ipairs(anchors) do
+        if math.abs(p[1]-(bx+p[3]*dx))>width*0.025 or math.abs(p[2]-(by+p[4]*dy))>height*0.02 then
+            return nil, '数字锚点排列不符合'
+        end
+    end
+    local x1,x2,x3=bx,bx+dx,bx+2*dx
+    local xs={x1,x2,x3};local ys={by,by+dy,by+2*dy,by+3*dy}
+    local offset=dx*0.22
+    local function white(x,y)
+        x=math.floor(x+0.5);y=math.floor(y+0.5)
+        if x<0 or y<0 or x>=width or y>=height then return nil end
+        local c=get_color(x,y)
+        if type(c)~='number' then return nil end
+        local red=(c>>16)&255;local green=(c>>8)&255;local blue=c&255
+        return math.min(red,green,blue)>235 and math.max(red,green,blue)-math.min(red,green,blue)<25
+    end
+    for row=1,4 do
+        for col=1,3 do
+            local expected=row<4 or col==2
+            local left=white(xs[col]-offset,ys[row]+10)
+            local right=white(xs[col]+offset,ys[row]+10)
+            if left==nil or right==nil or left~=expected or right~=expected then return nil, '按键图色不匹配' end
+        end
+    end
+    for row=1,3 do
+        if white((x1+x2)/2,ys[row]+10) ~= false or white((x2+x3)/2,ys[row]+10) ~= false then
+            return nil, '列间隔未确认'
+        end
+    end
+    for row=1,3 do
+        if white(x2+offset,ys[row]+dy*0.66) ~= false then return nil, '行间隔未确认' end
+    end
+    local result={}
+    for row=1,3 do for col=1,3 do result[tostring((row-1)*3+col)]={xs[col],ys[row]} end end
+    result['0']={x2,ys[4]}
+    return result
+end
+
+-- 与美国版 us_form.zip_match_ratio 的字符匹配规则对应。
+-- 输入为ZIP字符串与OCR结果列表；仅在确认ZIP数字字段后使用。
+-- 按Unicode码点比较并去除Python str.split()识别的空白。
+local function us_is_space(c)
+    return (c>=9 and c<=13) or (c>=28 and c<=32) or c==0x85 or c==0xa0 or c==0x1680 or
+           (c>=0x2000 and c<=0x200a) or c==0x2028 or c==0x2029 or c==0x202f or c==0x205f or c==0x3000
+end
+local function us_characters(text, strip_space)
+    local result={}
+    for _,c in utf8.codes(text) do
+        if not strip_space or not us_is_space(c) then result[#result+1]=c end
+    end
+    return result
+end
+
+local function us_longest_block(a, b, alo, ahi, blo, bhi)
+    local best_i, best_j, best_len = alo, blo, 0
+    local previous = {}
+    for i = alo, ahi do
+        local current = {}
+        for j = blo, bhi do
+            if a[i] == b[j] then
+                local size = (previous[j - 1] or 0) + 1
+                current[j] = size
+                if size > best_len then
+                    best_i, best_j, best_len = i - size + 1, j - size + 1, size
+                end
+            end
+        end
+        previous = current
+    end
+    return best_i, best_j, best_len
+end
+
+local function us_zip_ratio(value, lines)
+    local text = us_characters(table.concat(lines or {}, ""), true)
+    if #text == 0 then return 0 end
+    local expected = us_characters(value, false)
+    local stack = {{1, #expected, 1, #text}}
+    local matched = 0
+    while #stack > 0 do
+        local range = table.remove(stack)
+        local i, j, size = us_longest_block(expected, text, range[1], range[2], range[3], range[4])
+        if size > 0 then
+            matched = matched + size
+            if range[1] < i and range[3] < j then
+                stack[#stack + 1] = {range[1], i - 1, range[3], j - 1}
+            end
+            if i + size <= range[2] and j + size <= range[4] then
+                stack[#stack + 1] = {i + size, range[2], j + size, range[4]}
+            end
+        end
+    end
+    return 2 * matched / (#expected + #text)
+end
+
+-- 研发预检：只对已被条款模板及几何约束确认的候选点分类；不执行触摸。
+-- getColor每次重新截图；动态页面和动画可能改变画面，调用者必须重新定位复核。
+local function us_checkbox_classify(get_color,x,y,width,height)
+    if type(get_color)~='function' or type(x)~='number' or type(y)~='number' or
+       type(width)~='number' or type(height)~='number' then return 'unknown' end
+    x=math.floor(x+0.5);y=math.floor(y+0.5)
+    if x<13 or y<13 or x+13>=width or y+13>=height then return 'unknown' end
+    local function sample(dx,dy)
+        local c=get_color(x+dx,y+dy)
+        if type(c)~='number' then return nil end
+        local r=(c>>16)&255;local g=(c>>8)&255;local b=c&255
+        if r>230 and g>230 and b>230 and math.max(r,g,b)-math.min(r,g,b)<25 then return 'white' end
+        if g>70 and b>60 and r<100 and g-r>35 and b-r>20 then return 'teal' end
+        if math.max(r,g,b)<180 and math.max(r,g,b)-math.min(r,g,b)<35 then return 'dark' end
+        return 'other'
+    end
+    local teal,white=0,0
+    for dx=-8,8,4 do for dy=-8,8,4 do
+        local c=sample(dx,dy)
+        if not c then return 'unknown' end
+        if c=='teal' then teal=teal+1 elseif c=='white' then white=white+1 end
+    end end
+    if teal>=6 and white>=1 then return 'checked' end
+    if teal>0 then return 'unknown' end
+    for _,p in ipairs({{0,0},{-6,0},{6,0},{0,-6},{0,6}}) do
+        if sample(p[1],p[2])~='white' then return 'unknown' end
+    end
+    for _,p in ipairs({{-12,0},{11,0},{0,-12},{0,11}}) do
+        if sample(p[1],p[2])~='dark' then return 'unknown' end
+    end
+    return 'unchecked'
+end
+
+-- 条款状态机的测试组件，不自行读取屏幕或执行输入；所需函数由调用者提供。
+-- 每次只允许点击一次；坐标从新条款锚点平移复核，模糊/失败直接停止。
+local function us_check_terms_once(anchor,find_empty,find_checked,classify,click,pause,max_checks)
+    if type(max_checks)~='number' or max_checks<1 or max_checks>12 or max_checks~=math.floor(max_checks) then
+        error('条款核验次数无效',0)
+    end
+    local a=anchor()
+    if not a or type(a.x)~='number' or type(a.y)~='number' then error('未找到条款锚点',0) end
+    local empty=find_empty(a)
+    local checked=find_checked(a)
+    local point=empty or checked
+    if not point or type(point.x)~='number' or type(point.y)~='number' or
+       point.x>=a.x or math.abs(point.y-a.y)>80 then error('未确认条款左侧复选框',0) end
+    local before=classify(point)
+    if before=='checked' then return 'already_checked' end
+    if before~='unchecked' then error('复选框图色未确认',0) end
+    local dx,dy=point.x-a.x,point.y-a.y
+    click(point)
+    for _=1,max_checks do
+        pause(500)
+        local current=anchor()
+        if not current or type(current.x)~='number' or type(current.y)~='number' then error('点击后条款锚点消失',0) end
+        local expected={x=current.x+dx,y=current.y+dy}
+        local state=classify(expected)
+        if state=='checked' then return 'checked' end
+    end
+    error('条款点击后未确认勾选；不会再次点击',0)
+end
+
+
+-- iPhone 11 / 414x896，实机邮箱键盘独立映射。
+-- 不复用普通键盘的数字/符号页；按键后等待100..500毫秒。
+local emailKeys={alpha={},number={},symbol={}}
+local function emailRow(page,text,y,x,dx)
+ for i=1,#text do emailKeys[page][text:sub(i,i)]={x+(i-1)*dx,y} end
+end
+emailRow('alpha','qwertyuiop',626,22,41)
+emailRow('alpha','asdfghjkl',682,43,41)
+emailRow('alpha','zxcvbnm',738,84,41)
+emailRow('number','1234567890',626,22,41)
+emailRow('symbol','`|{}?%^*/\'',626,22,41)
+for _,page in ipairs({'number','symbol'}) do
+ emailRow(page,'$!~&=#[]',682,46,46)
+ emailRow(page,'._-+',738,101,71)
+end
+local emailPage='alpha'
+local function emailTap(x,y) tap(x,y);msleep(math.random(100,500)) end
+local function emailReset()
+ local abc=findImage('PHONE_keyboard_abc.png',0.75,{x=0,y=770,width=55,height=50})
+ if abc and #abc==1 then emailTap(27,795)
+ else
+  local numbers=findImage('PHONE_keyboard_123.png',0.75,{x=0,y=770,width=55,height=50})
+  if not numbers or #numbers~=1 then error('邮箱键盘未确认') end
+ end
+ emailPage='alpha'
+end
+local function emailSelect(page)
+ if emailPage==page then return end
+ if emailPage=='alpha' then emailTap(27,795);emailPage='number' end
+ if page=='alpha' then emailTap(27,795);emailPage='alpha'
+ elseif page~=emailPage then emailTap(27,738);emailPage=page end
+end
+local function emailType(value)
+ if screenWidth()~=414 or screenHeight()~=896 then
+  error('邮箱键盘映射仅核对过414x896逻辑坐标，已停止输入')
+ end
+ value=value:lower()
+ for i=1,#value do
+  local c=value:sub(i,i)
+  if c~='@' and c~='.' and not emailKeys.alpha[c] and not emailKeys.number[c] and not emailKeys.symbol[c] then error('邮箱字符没有实机映射') end
+ end
+ emailReset()
+ for i=1,#value do
+  local c=value:sub(i,i)
+  if c=='@' or c=='.' then emailSelect('alpha');emailTap(c=='@' and 233 or 284,795)
+  else
+   local page=emailKeys.alpha[c] and 'alpha' or (emailKeys.number[c] and 'number' or 'symbol')
+   emailSelect(page);local key=emailKeys[page][c];emailTap(key[1],key[2])
+  end
+ end
+ emailSelect('alpha')
+end
+local function emailPunctuation(value)
+ return value:lower():gsub('%s',''):gsub('[%w]','')
+end
+local function emailReadMatches(expected,text,y)
+ text=(text or ''):lower():gsub('%s','')
+ local expectedMarks=emailPunctuation(expected)
+ if not text:find('@',1,true) then
+  -- Vision sometimes reads the real @ glyph as 'a'. Require its image instead.
+  local hits=findImage('PHONE_email_value_at.png',0.75,{x=0,y=math.max(0,y-22),width=screenWidth(),height=44})
+  if not hits or #hits~=1 then return false end
+  expectedMarks=expectedMarks:gsub('@','')
+ end
+ return emailPunctuation(text)==expectedMarks and us_zip_ratio(expected:lower(),{text})>=0.60
+end
+
+-- iPhone 11 QWERTY 屏幕键盘；只用点击，不发送 HID 键盘事件。
+local screenPage='alpha'
+local screenKeys={alpha={},number={},symbol={}}
+local function row(page,text,y,x,dx)
+ for i=1,#text do screenKeys[page][text:sub(i,i)]={x+(i-1)*dx,y} end
+end
+row('alpha','qwertyuiop',626,22,41)
+row('alpha','asdfghjkl',682,43,41)
+row('alpha','zxcvbnm',738,84,41)
+row('number','1234567890',626,22,41)
+row('number','-/:;()$&@"',682,22,41)
+row('symbol','[]{}#%^*+=',626,22,41)
+row('symbol','_\\|~<>',682,22,41)
+for _,page in ipairs({'number','symbol'}) do row(page,'.,?!\'',738,94,56) end
+local function screenTap(x,y) tap(x,y);msleep(math.random(100,500)) end
+local function screenReset()
+ local abc=findImage('PHONE_keyboard_abc.png',0.75,{x=0,y=770,width=55,height=50})
+ if abc and #abc==1 then screenTap(27,795)
+ else
+  local numbers=findImage('PHONE_keyboard_123.png',0.75,{x=0,y=770,width=55,height=50})
+  if not numbers or #numbers~=1 then error('屏幕键盘布局未确认') end
+ end
+ screenPage='alpha'
+end
+local function screenSelect(page)
+ if screenPage==page then return end
+ if screenPage=='alpha' then screenTap(27,795);screenPage='number' end
+ if page=='alpha' then screenTap(27,795);screenPage='alpha'
+ elseif page~=screenPage then screenTap(27,738);screenPage=page end
+end
+local function screenKey(page,x,y,upper)
+ screenSelect(page)
+ if page=='alpha' then
+  local color=getColor(15,721)
+  if not color then error('Shift 状态不可读') end
+  local active=math.min((color>>16)&255,(color>>8)&255,color&255)>225
+  if active~=upper then screenTap(27,738) end
+ end
+ screenTap(x,y)
+end
+local function screenType(value)
+ if value:match('^%d+$') and us_locate_numeric_keypad then
+  local keys=us_locate_numeric_keypad(ocrText(),screenWidth(),screenHeight(),getColor)
+  if keys then
+   for i=1,#value do local key=keys[value:sub(i,i)];screenTap(key[1],key[2]) end
+   return
+  end
+ end
+ screenReset()
+ for i=1,#value do
+  local c=value:sub(i,i)
+  if c=='`' then
+   screenSelect('number')
+   touchDown(0,318,738);msleep(700)
+   touchMove(0,149,675);msleep(80);touchUp(0,149,675)
+   msleep(math.random(100,500))
+  elseif c==' ' then screenSelect('alpha');screenTap(207,795)
+  else
+   local lower=c:lower();local page=screenKeys.alpha[lower] and 'alpha' or (screenKeys.number[c] and 'number' or 'symbol')
+   local key=screenKeys[page][page=='alpha' and lower or c]
+   if not key then error('屏幕键盘字符未支持') end
+   screenKey(page,key[1],key[2],page=='alpha' and c~=lower)
+  end
+ end
+ screenSelect('alpha')
+end
+__atl_screen_type=function(value)
+ if __atl_screen_context=='email' then
+  if not emailType then error('独立邮箱键盘尚未加载') end
+  emailType(value)
+ else screenType(value) end
+ return true
+end
+
+-- 美国版注册（开发中）：只适用于已验证的 iPhone 11 414×896 点竖屏。
+-- 启动前手动打开 Vinted 美国版空白注册页；请从管理器先派发注册任务。
+-- 此版本会点击 Continue；只有在用户确认本次真实测试后才允许运行。
+if screenWidth()~=414 or screenHeight()~=896 then error('屏幕尺寸不匹配，停止') end
+local function scan() return ocrText() end
+local function normalized(t) return (t or ''):lower():gsub('^%s+',''):gsub('%s+$','') end
+local function exact(w,blocks)
+ local found=nil
+ for _,b in ipairs(blocks or scan()) do if normalized(b.text)==w then if found then error('字段标签不唯一') end;found=b end end
+ return found
+end
+local function relativeMatch(expected,y,threshold)
+ local best=0
+ for _,b in ipairs(scan()) do
+  if math.abs((b.y+b.height/2)-y)<45 then
+   local text=normalized(b.text)
+   local punctuationOK=__atl_screen_context~='email' or emailReadMatches(expected,text,y)
+   if punctuationOK then local score=us_zip_ratio(expected:lower(),{text});if score>best then best=score end end
+  end
+ end
+ return best>=threshold
+end
+local first,initial={},scan()
+for _,name in ipairs({'full name','username','email','password','zip code'}) do first[name]=exact(name,initial);if not first[name] then error('空白表单未确认') end end
+local job=getRegistrationJob();if not job or job.password~=nil then error('没有可用的注册任务') end
+log('REG_JOB '..job.jobId)
+local function focusField(b,name)
+ tap(b.x+b.width/2,b.y+b.height/2);msleep(600)
+ local current=exact(name)
+ if not current and name=='username' then current=exact('userame') end
+ if not current then error('点击后字段标签未确认：'..name) end
+ local y=math.floor(current.y+current.height/2+0.5)
+ local c=getColor(16,y)
+ if type(c)~='number' then error('字段焦点图色不可用') end
+ local r=(c>>16)&255;local g=(c>>8)&255;local blue=c&255
+ if not (g>r+35 and blue>r+35 and g>55 and blue>55) then error('字段未获得焦点：'..name) end
+ return y
+end
+local function inputField(name,value,threshold)
+ local b=exact(name)
+ if not b and name=='username' then
+  local candidate=exact('userame')
+  if candidate then
+   local roi={x=0,y=math.max(0,math.floor(candidate.y-15)),width=180,height=55}
+   local hits=findImage('US400_us_label_username.png',0.75,roi);if #hits==1 then b=candidate end
+  end
+ end
+ if not b then error('字段未确认') end
+ local y=focusField(b,name);__atl_screen_context=name;inputText(value)
+ for _=1,2 do
+  msleep(700)
+  if relativeMatch(value,y,threshold) then return end
+ end
+ error('字段核验不明确，停止：'..name)
+end
+inputField('full name',job.fullName,0.60)
+inputField('email',job.email,0.60)
+local pass=exact('password');if not pass then error('密码栏未确认') end
+-- 用户确认全新空白表单的眼睛图标可能随机；只在此页面按密码栏右侧一次。
+local eyeX=screenWidth()-48
+local eyeY=pass.y+pass.height/2
+if eyeY<100 or eyeY>screenHeight()-100 then error('密码栏位置不明确') end
+tap(eyeX,eyeY);msleep(700)
+focusField(pass,'password');__atl_screen_context='password';inputRegistrationPassword();msleep(700)
+tap(eyeX,eyeY);msleep(700)
+inputField('username',job.username,0.60)
+local zip=exact('zip code');if not zip then error('ZIP字段未确认') end
+local zy=focusField(zip,'zip code')
+local keys=us_locate_numeric_keypad(scan(),screenWidth(),screenHeight(),getColor);if not keys then error('数字键盘未确认') end
+for i=1,5 do
+ local pt=keys[job.zip:sub(i,i)];if not pt then error('数字键缺失') end
+ tap(pt[1],pt[2]);msleep(math.random(100,500))
+end
+local zipConfirmed=false
+for _=1,2 do msleep(700);if relativeMatch(job.zip,zy,0.60) then zipConfirmed=true;break end end
+if not zipConfirmed then error('ZIP核验不明确') end
+registrationStage('fields_ready')
+-- 数字键盘无 Done：在表单区域向上滑动，之后由条款和按钮重新定位复核。
+swipe(200,530,200,250,450);msleep(1200)
+local function anchor()
+ local found=nil
+ for _,b in ipairs(scan()) do local t=normalized(b.text):gsub('%s','');if t:find('terms&conditions',1,true) then if found then error('条款标签不唯一') end;found={x=b.x+b.width/2,y=b.y+b.height/2} end end
+ return found
+end
+local function area(a) return {x=0,y=math.max(0,math.floor(a.y-40)),width=80,height=80} end
+local function empty(a) local h=findImage('US400_calibrated_unchecked.png',0.75,area(a));if #h==1 then return {x=h[1][1],y=h[1][2]} end end
+local function checked(a) local h=findImage('US400_reg_checked.png',0.75,area(a));if #h==1 then return {x=h[1][1],y=h[1][2]} end end
+local function classify(q) return us_checkbox_classify(getColor,q.x,q.y,screenWidth(),screenHeight()) end
+local state=us_check_terms_once(anchor,empty,checked,classify,function(q) tap(q.x,q.y) end,msleep,3)
+if state~='checked' and state~='already_checked' then error('条款未确认') end
+for _,b in ipairs(scan()) do
+ local text=normalized(b.text)
+ for _,phrase in ipairs({'invalid email','invalid password','already in use','already taken','already exists','is required','must contain'}) do
+  if text:find(phrase,1,true) then error('表单存在校验提示，停止提交') end
+ end
+end
+local button=findImage('US400_reg_continue.png',0.75,{x=0,y=550,width=414,height=260})
+if #button~=1 then error('Continue按钮未确认') end
+registrationStage('begin_submit');tap(button[1][1],button[1][2]);msleep(600)
+for _=1,12 do
+ local blocks=scan();local human=false;local field=false
+ for _,b in ipairs(blocks) do
+  local t=normalized(b.text)
+  if t:find('session has been blocked',1,true) then error('SERVER_BLOCKED_STOP') end
+  if t:find('human',1,true) and t:find('verify',1,true) then human=true end
+  if t:find('phone number',1,true) then error('SMS_REQUIRED_RESULT') end
+  if t:find('verification code',1,true) or t:find('check your inbox',1,true) then field=true end
+ end
+ if human then error('HUMAN_VERIFICATION_PAUSE') end
+ if field then registrationStage('verification_seen');return end
+ msleep(700)
+end
+error('SUBMIT_RESULT_UNKNOWN_STOP')
+
+end
+parts['verify']=function()
+-- 开发中：基于OCR锚点和多点图色验证数字键盘，只返回候选坐标，不发送触摸。
+-- 各次getColor不是同一冻结帧，因此只可作为受控测试，未通过完整真机负例前不接入注册。
+local function us_locate_numeric_keypad(blocks, width, height, get_color)
+    if type(blocks) ~= 'table' or type(width) ~= 'number' or type(height) ~= 'number' or type(get_color) ~= 'function' then return nil, '参数错误' end
+    local a = {}
+    for _, b in ipairs(blocks) do
+        local t = tostring(b.text or ''):gsub('%s','')
+        if t:match('^[1-9]$') and type(b.x)=='number' and type(b.y)=='number' and type(b.width)=='number' and type(b.height)=='number' and b.y > height*0.5 then
+            if a[t] then return nil, '数字锚点重复' end
+            a[t] = {b.x+b.width/2,b.y+b.height/2}
+        end
+    end
+    local anchors={}
+    for d=1,9 do
+        local point=a[tostring(d)]
+        if point then anchors[#anchors+1]={point[1],point[2],(d-1)%3,math.floor((d-1)/3)} end
+    end
+    if #anchors<5 then return nil, '数字锚点不足' end
+    local dxsum,dysum,dxcount,dycount=0,0,0,0
+    for i=1,#anchors do for j=i+1,#anchors do
+        local p,q=anchors[i],anchors[j]
+        if p[3]~=q[3] then dxsum=dxsum+(q[1]-p[1])/(q[3]-p[3]);dxcount=dxcount+1 end
+        if p[4]~=q[4] then dysum=dysum+(q[2]-p[2])/(q[4]-p[4]);dycount=dycount+1 end
+    end end
+    if dxcount==0 or dycount==0 then return nil, '锚点布局不足' end
+    local dx,dy=dxsum/dxcount,dysum/dycount
+    if dx<width*0.19 or dx>width*0.40 or dy<height*0.035 or dy>height*0.10 then return nil, '键盘间距不符合' end
+    local bx,by=0,0
+    for _,p in ipairs(anchors) do bx=bx+p[1]-p[3]*dx;by=by+p[2]-p[4]*dy end
+    bx,by=bx/#anchors,by/#anchors
+    for _,p in ipairs(anchors) do
+        if math.abs(p[1]-(bx+p[3]*dx))>width*0.025 or math.abs(p[2]-(by+p[4]*dy))>height*0.02 then
+            return nil, '数字锚点排列不符合'
+        end
+    end
+    local x1,x2,x3=bx,bx+dx,bx+2*dx
+    local xs={x1,x2,x3};local ys={by,by+dy,by+2*dy,by+3*dy}
+    local offset=dx*0.22
+    local function white(x,y)
+        x=math.floor(x+0.5);y=math.floor(y+0.5)
+        if x<0 or y<0 or x>=width or y>=height then return nil end
+        local c=get_color(x,y)
+        if type(c)~='number' then return nil end
+        local red=(c>>16)&255;local green=(c>>8)&255;local blue=c&255
+        return math.min(red,green,blue)>235 and math.max(red,green,blue)-math.min(red,green,blue)<25
+    end
+    for row=1,4 do
+        for col=1,3 do
+            local expected=row<4 or col==2
+            local left=white(xs[col]-offset,ys[row]+10)
+            local right=white(xs[col]+offset,ys[row]+10)
+            if left==nil or right==nil or left~=expected or right~=expected then return nil, '按键图色不匹配' end
+        end
+    end
+    for row=1,3 do
+        if white((x1+x2)/2,ys[row]+10) ~= false or white((x2+x3)/2,ys[row]+10) ~= false then
+            return nil, '列间隔未确认'
+        end
+    end
+    for row=1,3 do
+        if white(x2+offset,ys[row]+dy*0.66) ~= false then return nil, '行间隔未确认' end
+    end
+    local result={}
+    for row=1,3 do for col=1,3 do result[tostring((row-1)*3+col)]={xs[col],ys[row]} end end
+    result['0']={x2,ys[4]}
+    return result
+end
+
+-- 与美国版 us_form.zip_match_ratio 的字符匹配规则对应。
+-- 输入为ZIP字符串与OCR结果列表；仅在确认ZIP数字字段后使用。
+-- 按Unicode码点比较并去除Python str.split()识别的空白。
+local function us_is_space(c)
+    return (c>=9 and c<=13) or (c>=28 and c<=32) or c==0x85 or c==0xa0 or c==0x1680 or
+           (c>=0x2000 and c<=0x200a) or c==0x2028 or c==0x2029 or c==0x202f or c==0x205f or c==0x3000
+end
+local function us_characters(text, strip_space)
+    local result={}
+    for _,c in utf8.codes(text) do
+        if not strip_space or not us_is_space(c) then result[#result+1]=c end
+    end
+    return result
+end
+
+local function us_longest_block(a, b, alo, ahi, blo, bhi)
+    local best_i, best_j, best_len = alo, blo, 0
+    local previous = {}
+    for i = alo, ahi do
+        local current = {}
+        for j = blo, bhi do
+            if a[i] == b[j] then
+                local size = (previous[j - 1] or 0) + 1
+                current[j] = size
+                if size > best_len then
+                    best_i, best_j, best_len = i - size + 1, j - size + 1, size
+                end
+            end
+        end
+        previous = current
+    end
+    return best_i, best_j, best_len
+end
+
+local function us_zip_ratio(value, lines)
+    local text = us_characters(table.concat(lines or {}, ""), true)
+    if #text == 0 then return 0 end
+    local expected = us_characters(value, false)
+    local stack = {{1, #expected, 1, #text}}
+    local matched = 0
+    while #stack > 0 do
+        local range = table.remove(stack)
+        local i, j, size = us_longest_block(expected, text, range[1], range[2], range[3], range[4])
+        if size > 0 then
+            matched = matched + size
+            if range[1] < i and range[3] < j then
+                stack[#stack + 1] = {range[1], i - 1, range[3], j - 1}
+            end
+            if i + size <= range[2] and j + size <= range[4] then
+                stack[#stack + 1] = {i + size, range[2], j + size, range[4]}
+            end
+        end
+    end
+    return 2 * matched / (#expected + #text)
+end
+
+-- 研发预检：只对已被条款模板及几何约束确认的候选点分类；不执行触摸。
+-- getColor每次重新截图；动态页面和动画可能改变画面，调用者必须重新定位复核。
+local function us_checkbox_classify(get_color,x,y,width,height)
+    if type(get_color)~='function' or type(x)~='number' or type(y)~='number' or
+       type(width)~='number' or type(height)~='number' then return 'unknown' end
+    x=math.floor(x+0.5);y=math.floor(y+0.5)
+    if x<13 or y<13 or x+13>=width or y+13>=height then return 'unknown' end
+    local function sample(dx,dy)
+        local c=get_color(x+dx,y+dy)
+        if type(c)~='number' then return nil end
+        local r=(c>>16)&255;local g=(c>>8)&255;local b=c&255
+        if r>230 and g>230 and b>230 and math.max(r,g,b)-math.min(r,g,b)<25 then return 'white' end
+        if g>70 and b>60 and r<100 and g-r>35 and b-r>20 then return 'teal' end
+        if math.max(r,g,b)<180 and math.max(r,g,b)-math.min(r,g,b)<35 then return 'dark' end
+        return 'other'
+    end
+    local teal,white=0,0
+    for dx=-8,8,4 do for dy=-8,8,4 do
+        local c=sample(dx,dy)
+        if not c then return 'unknown' end
+        if c=='teal' then teal=teal+1 elseif c=='white' then white=white+1 end
+    end end
+    if teal>=6 and white>=1 then return 'checked' end
+    if teal>0 then return 'unknown' end
+    for _,p in ipairs({{0,0},{-6,0},{6,0},{0,-6},{0,6}}) do
+        if sample(p[1],p[2])~='white' then return 'unknown' end
+    end
+    for _,p in ipairs({{-12,0},{11,0},{0,-12},{0,11}}) do
+        if sample(p[1],p[2])~='dark' then return 'unknown' end
+    end
+    return 'unchecked'
+end
+
+-- 条款状态机的测试组件，不自行读取屏幕或执行输入；所需函数由调用者提供。
+-- 每次只允许点击一次；坐标从新条款锚点平移复核，模糊/失败直接停止。
+local function us_check_terms_once(anchor,find_empty,find_checked,classify,click,pause,max_checks)
+    if type(max_checks)~='number' or max_checks<1 or max_checks>12 or max_checks~=math.floor(max_checks) then
+        error('条款核验次数无效',0)
+    end
+    local a=anchor()
+    if not a or type(a.x)~='number' or type(a.y)~='number' then error('未找到条款锚点',0) end
+    local empty=find_empty(a)
+    local checked=find_checked(a)
+    local point=empty or checked
+    if not point or type(point.x)~='number' or type(point.y)~='number' or
+       point.x>=a.x or math.abs(point.y-a.y)>80 then error('未确认条款左侧复选框',0) end
+    local before=classify(point)
+    if before=='checked' then return 'already_checked' end
+    if before~='unchecked' then error('复选框图色未确认',0) end
+    local dx,dy=point.x-a.x,point.y-a.y
+    click(point)
+    for _=1,max_checks do
+        pause(500)
+        local current=anchor()
+        if not current or type(current.x)~='number' or type(current.y)~='number' then error('点击后条款锚点消失',0) end
+        local expected={x=current.x+dx,y=current.y+dy}
+        local state=classify(expected)
+        if state=='checked' then return 'checked' end
+    end
+    error('条款点击后未确认勾选；不会再次点击',0)
+end
+
+
+-- iPhone 11 / 414x896，实机邮箱键盘独立映射。
+-- 不复用普通键盘的数字/符号页；按键后等待100..500毫秒。
+local emailKeys={alpha={},number={},symbol={}}
+local function emailRow(page,text,y,x,dx)
+ for i=1,#text do emailKeys[page][text:sub(i,i)]={x+(i-1)*dx,y} end
+end
+emailRow('alpha','qwertyuiop',626,22,41)
+emailRow('alpha','asdfghjkl',682,43,41)
+emailRow('alpha','zxcvbnm',738,84,41)
+emailRow('number','1234567890',626,22,41)
+emailRow('symbol','`|{}?%^*/\'',626,22,41)
+for _,page in ipairs({'number','symbol'}) do
+ emailRow(page,'$!~&=#[]',682,46,46)
+ emailRow(page,'._-+',738,101,71)
+end
+local emailPage='alpha'
+local function emailTap(x,y) tap(x,y);msleep(math.random(100,500)) end
+local function emailReset()
+ local abc=findImage('PHONE_keyboard_abc.png',0.75,{x=0,y=770,width=55,height=50})
+ if abc and #abc==1 then emailTap(27,795)
+ else
+  local numbers=findImage('PHONE_keyboard_123.png',0.75,{x=0,y=770,width=55,height=50})
+  if not numbers or #numbers~=1 then error('邮箱键盘未确认') end
+ end
+ emailPage='alpha'
+end
+local function emailSelect(page)
+ if emailPage==page then return end
+ if emailPage=='alpha' then emailTap(27,795);emailPage='number' end
+ if page=='alpha' then emailTap(27,795);emailPage='alpha'
+ elseif page~=emailPage then emailTap(27,738);emailPage=page end
+end
+local function emailType(value)
+ if screenWidth()~=414 or screenHeight()~=896 then
+  error('邮箱键盘映射仅核对过414x896逻辑坐标，已停止输入')
+ end
+ value=value:lower()
+ for i=1,#value do
+  local c=value:sub(i,i)
+  if c~='@' and c~='.' and not emailKeys.alpha[c] and not emailKeys.number[c] and not emailKeys.symbol[c] then error('邮箱字符没有实机映射') end
+ end
+ emailReset()
+ for i=1,#value do
+  local c=value:sub(i,i)
+  if c=='@' or c=='.' then emailSelect('alpha');emailTap(c=='@' and 233 or 284,795)
+  else
+   local page=emailKeys.alpha[c] and 'alpha' or (emailKeys.number[c] and 'number' or 'symbol')
+   emailSelect(page);local key=emailKeys[page][c];emailTap(key[1],key[2])
+  end
+ end
+ emailSelect('alpha')
+end
+local function emailPunctuation(value)
+ return value:lower():gsub('%s',''):gsub('[%w]','')
+end
+local function emailReadMatches(expected,text,y)
+ text=(text or ''):lower():gsub('%s','')
+ local expectedMarks=emailPunctuation(expected)
+ if not text:find('@',1,true) then
+  -- Vision sometimes reads the real @ glyph as 'a'. Require its image instead.
+  local hits=findImage('PHONE_email_value_at.png',0.75,{x=0,y=math.max(0,y-22),width=screenWidth(),height=44})
+  if not hits or #hits~=1 then return false end
+  expectedMarks=expectedMarks:gsub('@','')
+ end
+ return emailPunctuation(text)==expectedMarks and us_zip_ratio(expected:lower(),{text})>=0.60
+end
+
+-- iPhone 11 QWERTY 屏幕键盘；只用点击，不发送 HID 键盘事件。
+local screenPage='alpha'
+local screenKeys={alpha={},number={},symbol={}}
+local function row(page,text,y,x,dx)
+ for i=1,#text do screenKeys[page][text:sub(i,i)]={x+(i-1)*dx,y} end
+end
+row('alpha','qwertyuiop',626,22,41)
+row('alpha','asdfghjkl',682,43,41)
+row('alpha','zxcvbnm',738,84,41)
+row('number','1234567890',626,22,41)
+row('number','-/:;()$&@"',682,22,41)
+row('symbol','[]{}#%^*+=',626,22,41)
+row('symbol','_\\|~<>',682,22,41)
+for _,page in ipairs({'number','symbol'}) do row(page,'.,?!\'',738,94,56) end
+local function screenTap(x,y) tap(x,y);msleep(math.random(100,500)) end
+local function screenReset()
+ local abc=findImage('PHONE_keyboard_abc.png',0.75,{x=0,y=770,width=55,height=50})
+ if abc and #abc==1 then screenTap(27,795)
+ else
+  local numbers=findImage('PHONE_keyboard_123.png',0.75,{x=0,y=770,width=55,height=50})
+  if not numbers or #numbers~=1 then error('屏幕键盘布局未确认') end
+ end
+ screenPage='alpha'
+end
+local function screenSelect(page)
+ if screenPage==page then return end
+ if screenPage=='alpha' then screenTap(27,795);screenPage='number' end
+ if page=='alpha' then screenTap(27,795);screenPage='alpha'
+ elseif page~=screenPage then screenTap(27,738);screenPage=page end
+end
+local function screenKey(page,x,y,upper)
+ screenSelect(page)
+ if page=='alpha' then
+  local color=getColor(15,721)
+  if not color then error('Shift 状态不可读') end
+  local active=math.min((color>>16)&255,(color>>8)&255,color&255)>225
+  if active~=upper then screenTap(27,738) end
+ end
+ screenTap(x,y)
+end
+local function screenType(value)
+ if value:match('^%d+$') and us_locate_numeric_keypad then
+  local keys=us_locate_numeric_keypad(ocrText(),screenWidth(),screenHeight(),getColor)
+  if keys then
+   for i=1,#value do local key=keys[value:sub(i,i)];screenTap(key[1],key[2]) end
+   return
+  end
+ end
+ screenReset()
+ for i=1,#value do
+  local c=value:sub(i,i)
+  if c=='`' then
+   screenSelect('number')
+   touchDown(0,318,738);msleep(700)
+   touchMove(0,149,675);msleep(80);touchUp(0,149,675)
+   msleep(math.random(100,500))
+  elseif c==' ' then screenSelect('alpha');screenTap(207,795)
+  else
+   local lower=c:lower();local page=screenKeys.alpha[lower] and 'alpha' or (screenKeys.number[c] and 'number' or 'symbol')
+   local key=screenKeys[page][page=='alpha' and lower or c]
+   if not key then error('屏幕键盘字符未支持') end
+   screenKey(page,key[1],key[2],page=='alpha' and c~=lower)
+  end
+ end
+ screenSelect('alpha')
+end
+__atl_screen_type=function(value)
+ if __atl_screen_context=='email' then
+  if not emailType then error('独立邮箱键盘尚未加载') end
+  emailType(value)
+ else screenType(value) end
+ return true
+end
+
+-- 美国版验证码（开发中）：仅在管理器已收到新邮件并发送验证码后运行。
+if screenWidth()~=414 or screenHeight()~=896 then error('屏幕尺寸不匹配') end
+local function lines() return ocrText() end
+local function exact(w)
+ local found=nil
+ for _,b in ipairs(lines()) do local t=(b.text or ''):lower():gsub('^%s+',''):gsub('%s+$','');if t==w then if found then error('页面文字不唯一') end;found=b end end
+ return found
+end
+local title=exact('verify your email')
+if not title then error('未确认邮箱验证码页面') end
+local field=exact('please enter verification code here')
+if not field then error('验证码输入框未确认') end
+if not exact('verify') then error('验证码验证按钮未确认') end
+tap(field.x+field.width/2,field.y+field.height/2);msleep(800);inputRegistrationCode();msleep(700)
+local button=exact('verify');if not button then error('验证按钮未确认') end
+tap(button.x+button.width/2,button.y+button.height/2);msleep(2000)
+local stable=0
+for _=1,12 do
+ local blocks=lines()
+ local text={}
+ for _,b in ipairs(blocks) do text[(b.text or ''):lower():gsub('^%s+',''):gsub('%s+$','')]=b end
+ local function click(b) tap(b.x+b.width/2,b.y+b.height/2);msleep(600) end
+ if text['phone number'] or text['verify your phone number'] then log('REG_SMS_REQUIRED');registrationStage('failed');return end
+ local deny=text["don't allow"] or text['don’t allow']
+ if deny and (text['allow'] or text['“vinted” would like to send you notifications']) then
+  click(deny)
+ elseif text['your privacy preferences'] and text['choose essential'] then
+  click(text['choose essential'])
+ elseif text['what you earn is'] and text['list now'] then
+  tap(382,69);msleep(600)
+ end
+ local phone=findImage('US400_reg_phone_required_en.png',0.75,{x=0,y=330,width=414,height=220})
+ if #phone==1 then log('REG_SMS_REQUIRED');registrationStage('failed');return end
+ if text['home'] and text['browse'] and text['sell'] and text['inbox'] and text['profile'] then stable=stable+1 else stable=0 end
+ if stable>=2 then registrationStage('success');log('注册首页已确认');return end
+ msleep(1000)
+end
+error('验证码提交后结果不明确，请人工核对')
+
+end
+
+local function run(name)
+ local output={};local realLog=log
+ log=function(s) output[#output+1]=tostring(s);realLog(s) end
+ local ok,result=pcall(parts[name]);log=realLog
+ if not ok then error(result) end
+ return table.concat(output,'\n')
+end
+local function has(source,word) return source:find(word,1,true)~=nil end
+local function openApp(label,icon)
+ run('home')
+ local hits=nil
+ if label=='Settings' then
+  hits=findImage('PHONE_launch_settings.png',0.75,{x=0,y=224,width=141,height=197})
+ else
+  local labels=findText(label);local selected=nil
+  for _,p in ipairs(labels or {}) do if p[2]>100 and p[2]<800 and (not selected or p[2]>selected[2]) then selected=p end end
+  if not selected then error('APP_LABEL_NOT_FOUND '..label) end
+  hits=findImage('PHONE_launch_'..icon..'.png',0.75,{x=math.max(0,math.min(316,selected[1]-49)),y=math.max(0,selected[2]-90),width=98,height=88})
+ end
+ if not hits or #hits~=1 then error('APP_ICON_NOT_FOUND '..label) end
+ tap(hits[1][1],hits[1][2]);msleep(1000)
+end
+local function installed()
+ run('home');local labels=findText('Vinted')
+ if not labels or #labels==0 then return false end
+ if #labels~=1 then error('VINTED_ICON_AMBIGUOUS') end
+ local x,y=labels[1][1],labels[1][2]
+ local hits=findImage('PHONE_launch_vinted.png',0.75,{x=math.max(0,math.min(316,x-49)),y=math.max(0,y-90),width=98,height=88})
+ if not hits or #hits~=1 then error('VINTED_ICON_UNCONFIRMED') end
+ return true
+end
+local function safari()
+ openApp('Settings','settings');run('US_准备_Safari进入_开发中');run('US_准备_Safari清理_开发中')
+end
+local function amg()
+ AMG_BUSY_SEEN=false
+ openApp('AMG','amg');run('US_准备_AMG执行_开发中')
+ for i=1,3 do
+  local result=run('US_准备_AMG监测_开发中')
+  if has(result,'AMG_ERROR') or has(result,'AMG_UNCERTAIN') then error('AMG_RESULT_UNKNOWN_STOP') end
+  if has(result,'AMG_LEFT_TO_HOME') then error('AMG_EXITED') end
+  if has(result,'AMG_DONE') then return end
+ end
+ error('AMG_RESULT_UNKNOWN_STOP')
+end
+local function shadowState()
+ local s=run('US_准备_小火箭开启')
+ if has(s,'SHADOW_CONNECTING') then return 'connecting' end
+ if has(s,'SHADOW_OFF') then return 'off' end
+ if has(s,'SHADOW_ON') then return 'on' end
+ error('PROXY_STATE_UNKNOWN')
+end
+local function proxyOn()
+ openApp('Shadowrocket','shadowrocket')
+ local stable=0;local state='off'
+ for i=1,14 do
+  state=shadowState()
+  if state=='off' then stable=0;tap(350,134);msleep(1500)
+  elseif state=='connecting' then stable=0;msleep(1000)
+  else
+   stable=stable+1
+   if stable>=3 then msleep(3000);if shadowState()=='on' then return end;break end
+   msleep(1000)
+  end
+ end
+ if shadowState()~='off' then tap(350,134);msleep(2000) end
+ error('PROXY_CONNECT_TIMEOUT')
+end
+local function openForm()
+ local s=run('US_准备_注册页前置')
+ if has(s,'VINTED_FORM_READY') then return end
+ if not has(s,'VINTED_PAGE_PRESENT') then
+  openApp('Vinted','vinted');s=run('US_准备_注册页前置')
+  if has(s,'VINTED_FORM_READY') then return end
+ end
+ run('open_form')
+end
+local function waitCode()
+ for i=1,30 do
+  local page=run('observe')
+  if has(page,'PAGE_BLOCKED') then error('SERVER_BLOCKED_STOP') end
+  if has(page,'PAGE_PHONE_VERIFICATION') then phoneFlow('sms');return end
+  if has(page,'PAGE_HUMAN_VERIFICATION') then log('请手动完成人机验证，脚本会继续观察') end
+  local ok,mail=pcall(phoneFlow,'mail')
+  if ok and mail.state=='code_ready' and has(page,'PAGE_EMAIL_CODE') then local result=run('verify');if has(result,'REG_SMS_REQUIRED') then phoneFlow('sms') end;return end
+  msleep(2000)
+ end
+ error('MAIL_WAIT_TIMEOUT_STOP')
+end
+if screenWidth()~=414 or screenHeight()~=896 then error('PHONE_SIZE_MISMATCH') end
+local state=phoneFlow('begin')
+if state.state=='done' or state.state=='sms_required' then log('该账号已经完成，不会重复注册');return end
+if state.job~='' then
+ local job=phoneFlow('job_status')
+ if job.state=='done' then phoneFlow('finish');log('已恢复完成记录');return end
+ if job.state=='review' then
+  local page=run('observe')
+  if not has(page,'PAGE_EMAIL_CODE') then error('REVIEW_REQUIRED_NO_RESUBMIT') end
+  state=phoneFlow('resume_mail')
+ end
+end
+local stages={
+ {'卸载Vinted',function() if installed() then run('US_准备_卸载Vinted');if installed() then error('UNINSTALL_FAILED') end end end},
+ {'第一次Safari清理',safari},
+ {'关闭小火箭',function() openApp('Shadowrocket','shadowrocket');run('proxy_off') end},
+ {'第一次AMG',amg},
+ {'关闭后台',function() run('close_apps') end},
+ {'安装Vinted',function()
+  if installed() then return end
+  openApp('App Store','appstore');run('US_准备_AppStore安装')
+  for i=1,40 do local h=findText('OPEN');if h and #h>0 then return end;msleep(4000) end
+  error('INSTALL_TIMEOUT')
+ end},
+ {'第二次AMG',amg},
+ {'第二次Safari清理',safari},
+ {'开启小火箭',proxyOn},
+ {'第三次AMG',amg},
+ {'打开注册页',openForm},
+ {'领取本机账号和读取旧邮件基线',function() phoneFlow('prepare_account') end},
+ {'填写并单次提交',function() run('fill') end},
+ {'接码和注册后续页面',waitCode},
+}
+for index=state.next+1,#stages do
+ local item=stages[index]
+ for attempt=1,3 do
+  phoneFlow('stage_begin',index-1);log('阶段开始：'..item[1])
+  local ok,problem=pcall(item[2])
+  if ok then phoneFlow('stage_done',index-1);log('阶段完成：'..item[1]);break end
+  local message=tostring(problem)
+  if index>=12 or has(message,'_STOP') or has(message,'_PAUSE') or has(message,'SMS_REQUIRED') then error(message) end
+  phoneFlow('stage_failed',index-1)
+  if attempt>=3 then error(message) end
+  log('当前步骤15秒后重试：'..item[1]);msleep(15000)
+ end
+end
+phoneFlow('finish');log('手机完整流程完成，结果已保存到results.txt')
