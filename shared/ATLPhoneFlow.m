@@ -49,11 +49,17 @@ NSString *ATLPhoneMailCode(NSString *page){
  NSMutableSet *codes=[NSMutableSet set];for(NSTextCheckingResult *m in [re matchesInString:s options:0 range:NSMakeRange(0,s.length)])[codes addObject:[s substringWithRange:[m rangeAtIndex:1]]];
  return codes.count==1?codes.anyObject:nil;
 }
+NSString *ATLPhoneMailNewCode(NSString *page,NSString *baselineCode){NSString *code=ATLPhoneMailCode(page);return code && ![code isEqual:baselineCode]?code:nil;}
+static NSString *PFReadText(NSString *file,NSUInteger limit,BOOL missingOK,NSError **error){
+ int fd=open(file.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);struct stat st;
+ if(fd<0 && missingOK && errno==ENOENT)return @"";
+ if(fd<0 || !ATLRegPrivateFile(fd) || fstat(fd,&st)!=0 || st.st_size<0 || (NSUInteger)st.st_size>limit){if(fd>=0)close(fd);PFError(error,@"本机文件不可读取、权限不正确或内容过大，未执行界面操作");return nil;}
+ NSMutableData *bytes=[NSMutableData data];unsigned char b[2048];BOOL valid=YES;
+ for(;;){ssize_t n=read(fd,b,sizeof b);if(n<0 && errno==EINTR)continue;if(n<0){valid=NO;break;}if(!n)break;if(bytes.length+(NSUInteger)n>limit){valid=NO;break;}[bytes appendBytes:b length:(NSUInteger)n];}close(fd);
+ NSString *text=valid?[[NSString alloc]initWithData:bytes encoding:NSUTF8StringEncoding]:nil;if(!text)PFError(error,@"本机文件读取失败或不是有效UTF-8，保留文件并停止");return text;
+}
 static NSMutableDictionary *PFConfig(NSString *base,NSError **error){
- NSString *file=[base stringByAppendingPathComponent:@"Local/Files/config.txt"];int fd=open(file.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);struct stat st;
- if(fd<0 || !ATLRegPrivateFile(fd) || fstat(fd,&st)!=0 || st.st_size>16384){if(fd>=0)close(fd);PFError(error,@"本机配置缺失或权限不正确，请在本机文件编辑配置");return nil;}
- NSMutableData *bytes=[NSMutableData data];unsigned char b[2048];ssize_t n;while((n=read(fd,b,sizeof b))>0)[bytes appendBytes:b length:n];close(fd);
- NSString *text=[[NSString alloc]initWithData:bytes encoding:NSUTF8StringEncoding];if(!text){PFError(error,@"配置不是UTF-8文本");return nil;}
+ NSString *text=PFReadText([base stringByAppendingPathComponent:@"Local/Files/config.txt"],16384,NO,error);if(!text)return nil;
  NSMutableDictionary *result=[NSMutableDictionary dictionary];NSCharacterSet *space=NSCharacterSet.whitespaceAndNewlineCharacterSet;
  for(NSString *line in [text componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]){NSString *v=[line stringByTrimmingCharactersInSet:space];if(!v.length || [v hasPrefix:@"#"] || [v hasPrefix:@";"] || [v hasPrefix:@"["])continue;NSRange eq=[v rangeOfString:@"="];if(eq.location==NSNotFound)continue;NSString *key=[[v substringToIndex:eq.location] uppercaseString];result[key]=[[v substringFromIndex:eq.location+1] stringByTrimmingCharactersInSet:space];}
  for(NSString *key in @[@"EMAIL",@"PICKUP_API"])if(![result[key] length]){PFError(error,@"先在本机配置填写EMAIL和PICKUP_API，再运行完整流程");return nil;}
@@ -86,7 +92,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    }
    if(!s){
     struct stat oldJob;NSString *oldPath=[base stringByAppendingPathComponent:@"Registration/registration-job.json"];if(lstat(oldPath.fileSystemRepresentation,&oldJob)==0 || errno!=ENOENT){PFError(error,@"手机仍有已有注册任务，请先核对，不执行新的准备操作");return nil;}
-    NSString *results=[NSString stringWithContentsOfFile:[base stringByAppendingPathComponent:@"Local/Files/results.txt"] encoding:NSUTF8StringEncoding error:nil];
+    NSString *results=PFReadText([base stringByAppendingPathComponent:@"Local/Files/results.txt"],16*1024*1024,YES,error);if(!results)return nil;
     for(NSString *line in [results componentsSeparatedByString:@"\n"]){NSArray *f=[line componentsSeparatedByString:@"----"];if(f.count==7 && [[f[1] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]] && [@[@"完成",@"已完成",@"需要接短信码"] containsObject:f[5]]){PFError(error,@"该邮箱已有完成结果，不会再次注册");return nil;}}
     s=[@{@"config":config,@"next":@0,@"state":@"ready",@"attempts":@{}} mutableCopy];if(!PFSave(&store,s,error))return nil;
    }
@@ -94,6 +100,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
   }
   if(!s){PFError(error,@"请先启动完整流程");return nil;}
   if([action isEqual:@"status"])return PFSummary(s);
+  if([action isEqual:@"blocked"]){s[@"state"]=@"blocked";if(!PFSave(&store,s,error))return nil;return PFSummary(s);}
   if([action isEqual:@"stage_begin"]){
    if([s[@"retryAfter"] doubleValue]>NSDate.date.timeIntervalSince1970){PFError(error,@"当前断点仍需等待15秒重试间隔");return nil;}
    if(stage==11 && [s[@"state"] isEqual:@"running"])s[@"state"]=@"ready"; // No UI or submission in this stage; same saved job ID is reused.
@@ -127,7 +134,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    NSString *identifier=s[@"job"]?:NSUUID.UUID.UUIDString;
    NSDictionary *payload=PFPayload(c,identifier);
    // Save the identity before creation; a crash never silently generates a second job.
-   s[@"job"]=identifier;s[@"baseline"]=PFHash(page);if(!PFSave(&store,s,error))return nil;
+   s[@"job"]=identifier;s[@"baseline"]=PFHash(page);s[@"baseline_code"]=ATLPhoneMailCode(page)?:@"";if(!PFSave(&store,s,error))return nil;
    NSDictionary *job=ATLRegistrationCreate(reg,payload,error);return job?@{@"state":job[@"state"],@"job":identifier}:nil;
   }
   if([action isEqual:@"job_status"]){NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],error);return job?@{@"state":job[@"state"]}:nil;}
@@ -137,7 +144,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    if(![job[@"state"] isEqual:@"wait_code"]){PFError(error,@"当前任务不在等待邮箱验证码阶段");return nil;}
    NSString *page=PFFetch(c[@"EMAIL"],c[@"PICKUP_API"],stopped,error);if(!page)return nil;
    if([PFHash(page) isEqual:s[@"baseline"]])return @{@"state":@"wait_code"};
-   NSString *code=ATLPhoneMailCode(page);if(!code)return @{@"state":@"wait_code"};
+   NSString *code=ATLPhoneMailNewCode(page,s[@"baseline_code"]?:@"");if(!code)return @{@"state":@"wait_code"};
    return ATLRegistrationSetCode(reg,s[@"job"],code,error)?@{@"state":@"code_ready"}:nil;
   }
   if([action isEqual:@"finish"]){

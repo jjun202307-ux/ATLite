@@ -292,7 +292,7 @@ for _,b in ipairs(ocrText()) do
     if fields[norm]~=nil then fields[norm]=true end
     if norm:find('signupforvinted',1,true) or norm:find('continuewithemail',1,true) then present=true end
     if norm:find('wlanonly',1,true) or norm:find('wirelessdata',1,true) then permission=true end
-    if norm:find('sessionhasbeenblocked',1,true) then log('VINTED_SESSION_BLOCKED');error('session blocked') end
+    if norm:find('sessionhasbeenblocked',1,true) then log('VINTED_SESSION_BLOCKED');error('SERVER_BLOCKED_STOP') end
 end
 if permission then error('网络权限弹窗仍未关闭') end
 local ready=true
@@ -357,7 +357,7 @@ parts['open_form']=function()
 msleep(1000)
 local entry=nil
 for i=1,12 do
- local blocked=findText('session has been blocked');if blocked and #blocked>0 then log('VINTED_SESSION_BLOCKED');error('session blocked') end
+ local blocked=findText('session has been blocked');if blocked and #blocked>0 then log('VINTED_SESSION_BLOCKED');error('SERVER_BLOCKED_STOP') end
  entry=findText('Sign up for Vinted');if entry and #entry==1 then break end
  msleep(700)
 end
@@ -1296,6 +1296,7 @@ local function waitCode()
 end
 if screenWidth()~=414 or screenHeight()~=896 then error('PHONE_SIZE_MISMATCH') end
 local state=phoneFlow('begin')
+if state.state=='blocked' then error('SERVER_BLOCKED_STOP') end
 if state.state=='sms_pending' then phoneFlow('sms');log('已补写短信验证结果，本轮完成');return end
 if state.state=='done' or state.state=='sms_required' then log('该账号已经完成，不会重复注册');return end
 if state.job~='' and state.next>11 then
@@ -1336,6 +1337,7 @@ for index=state.next+1,#stages do
   local ok,problem=pcall(item[2])
   if ok then local current=phoneFlow('status');if current.state=='sms_required' then log('需要接短信码，本轮完成并已保存');return end;phoneFlow('stage_done',index-1);log('阶段完成：'..item[1]);break end
   local message=tostring(problem)
+  if has(message,'SERVER_BLOCKED_STOP') then phoneFlow('blocked');error(message) end
   if has(message,'SMS_REQUIRED') then phoneFlow('sms');log('需要接短信码，本轮完成并已保存');return end
   if index>=13 or has(message,'_STOP') or has(message,'_PAUSE') then error(message) end
   phoneFlow('stage_failed',index-1)
