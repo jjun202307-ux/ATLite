@@ -2,7 +2,7 @@
 #import "../shared/ATLJBRootPath.h"
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
-// ATLiteTweak v0.3.28 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.29 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -1090,7 +1090,7 @@ static int l_ocrText(lua_State *L) {
 }
 // Short, interruptible interval between emitted keyboard characters.
 static void ATTypingPause(lua_State *L) {
-    unsigned int remaining=40+arc4random_uniform(261);
+    unsigned int remaining=100+arc4random_uniform(401);
     while(remaining) {
         ATCheckScript(L);
         unsigned int slice=remaining>20?20:remaining;
@@ -1179,6 +1179,11 @@ static int l_getRegistrationJob(lua_State *L) {
         }
     }
     if(!found) { ATClearRegistrationSecret();if(gRegistrationID[0])return luaL_error(L,"registration job could not be loaded safely");lua_pushnil(L);return 1; }
+    // Screen typing at 100..500ms per key needs a bounded registration budget.
+    // It is granted once by the atomic pending-job claim; ordinary scripts keep 60s.
+    lua_getglobal(L,"__atl_screen_type");
+    if(lua_isfunction(L,-1))gScriptDeadline=ATMonotonicNow()+180.0;
+    lua_pop(L,1);
     lua_createtable(L,0,5);
     lua_pushstring(L,identifier);lua_setfield(L,-2,"jobId");
     lua_pushstring(L,email);lua_setfield(L,-2,"email");
@@ -1317,7 +1322,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.28 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.29 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1823,7 +1828,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.28 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.29 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }
