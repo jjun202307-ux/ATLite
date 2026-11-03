@@ -2,7 +2,7 @@
 #import "../shared/ATLJBRootPath.h"
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
-// ATLiteTweak v0.3.27 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.28 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -1122,12 +1122,24 @@ static int l_inputBackspace(lua_State *L) {
     if(!ok)return luaL_error(L,"backspace event failed");
     lua_pushboolean(L,1);return 1;
 }
+// An automation script can supply its screen keyboard implementation. Passwords
+// and codes stay in memory; the callback result must confirm typing completed.
+static int ATTryScreenKeyboard(lua_State *L,const char *text,size_t length) {
+    lua_getglobal(L,"__atl_screen_type");
+    if(!lua_isfunction(L,-1)){lua_pop(L,1);return 0;}
+    lua_pushlstring(L,text,length);
+    if(lua_pcall(L,1,1,0)!=LUA_OK){lua_pop(L,1);return -1;}
+    BOOL ok=lua_toboolean(L,-1);lua_pop(L,1);return ok?1:-1;
+}
 static int l_inputText(lua_State *L) {
     size_t length=0; const unsigned char *text=(const unsigned char *)luaL_checklstring(L,1,&length);
     if (!length || length>254) return luaL_error(L,"inputText: expected 1..254 printable ASCII bytes");
     uint16_t usages[254]; int shifts[254];
     for (size_t i=0; i<length; i++) if (!ATASCIIKey(text[i],&usages[i],&shifts[i]))
         return luaL_error(L,"inputText: this lightweight build supports printable ASCII email text only");
+    int screenResult=ATTryScreenKeyboard(L,(const char *)text,length);
+    if(screenResult<0)return luaL_error(L,"screen keyboard input failed");
+    if(screenResult>0){lua_pushboolean(L,1);return 1;}
     if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent) return luaL_error(L,"inputText: HID keyboard unavailable");
     for (size_t i=0; i<length; i++) {
         ATCheckScript(L);
@@ -1177,6 +1189,8 @@ static int l_getRegistrationJob(lua_State *L) {
 }
 static int l_inputRegistrationPassword(lua_State *L) {
     if(!gRegistrationID[0] || !gRegistrationPassword[0]) return luaL_error(L,"registration password unavailable or already used");
+    int screenResult=ATTryScreenKeyboard(L,gRegistrationPassword,strlen(gRegistrationPassword));
+    if(screenResult){ATClearRegistrationSecret();if(screenResult<0)return luaL_error(L,"registration screen keyboard input failed");lua_pushboolean(L,1);return 1;}
     if(!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent) {ATClearRegistrationSecret();return luaL_error(L,"keyboard unavailable");}
     size_t length=strlen(gRegistrationPassword);
     for(size_t i=0;i<length;i++) {
@@ -1198,6 +1212,8 @@ static int l_inputRegistrationCode(lua_State *L) {
             found=idOK && [job[@"code"] getCString:gRegistrationCode maxLength:sizeof(gRegistrationCode) encoding:NSUTF8StringEncoding];}
     }
     if(!found){ATClearRegistrationCode();return luaL_error(L,"registration code unavailable");}
+    int screenResult=ATTryScreenKeyboard(L,gRegistrationCode,strlen(gRegistrationCode));
+    if(screenResult){ATClearRegistrationCode();if(screenResult<0)return luaL_error(L,"verification screen keyboard input failed");lua_pushboolean(L,1);return 1;}
     if(!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent){ATClearRegistrationCode();return luaL_error(L,"keyboard unavailable");}
     size_t length=strlen(gRegistrationCode);
     for(size_t i=0;i<length;i++){
@@ -1301,7 +1317,7 @@ static int l_failEmailJob(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.27 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.28 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1807,7 +1823,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.27 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.28 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }
