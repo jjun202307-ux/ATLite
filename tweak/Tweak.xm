@@ -1330,6 +1330,7 @@ static int l_phoneFlow(lua_State *L) {
     NSError *error=nil;
     NSDictionary *reply=ATLPhoneFlow(ATBaseDir(),action,stage,^{return ATShouldStop() || ATScriptExpired();},&error);
     if(!reply)return luaL_error(L,"phone flow: %s",(error.localizedDescription?:@"operation failed").UTF8String);
+    if([action isEqual:@"sms"]){ATClearRegistrationSecret();ATClearRegistrationCode();gRegistrationID[0]=0;}
     if([action isEqual:@"begin"] && !gPhoneFlowStarted){gPhoneFlowStarted=YES;gScriptDeadline=ATMonotonicNow()+1800.0;}
     lua_createtable(L,0,(int)reply.count);
     for(NSString *key in reply){id value=reply[key];if([value isKindOfClass:NSString.class])lua_pushstring(L,[value UTF8String]);else if([value isKindOfClass:NSNumber.class])lua_pushinteger(L,[value longLongValue]);else continue;lua_setfield(L,-2,key.UTF8String);}

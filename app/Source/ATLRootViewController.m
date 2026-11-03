@@ -37,7 +37,7 @@ static NSString *ATLFilesDirectory(void) {
 @implementation ATLLocalTextController
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = self.editable ? @"本机配置" : @"本机结果";
+    self.title = self.editable ? @"本机配置" : ([self.fileName isEqual:@"纯手机运行说明.txt"]?@"运行说明":@"本机结果");
     self.view.backgroundColor = UIColor.systemBackgroundColor;
     self.editor = [[UITextView alloc] initWithFrame:self.view.bounds];
     self.editor.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -58,6 +58,8 @@ static NSString *ATLFilesDirectory(void) {
         self.editor.text = @"文件无法读取，请检查本机目录权限。";
         return;
     }
+    if(self.editable && [self.editor.text rangeOfString:@"EMAIL=" options:NSCaseInsensitiveSearch].location==NSNotFound)
+        self.editor.text=[self.editor.text stringByAppendingString:@"\n[phone]\nEMAIL=\nPICKUP_API=\nUSERNAME=\nFULL_NAME=\nPASSWORD=\nCOUNTRY=美国\nZIP=11714\n"];
     if (self.editable) self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"保存" style:UIBarButtonItemStyleDone target:self action:@selector(saveFile)];
 }
 - (void)saveFile {
@@ -121,9 +123,9 @@ static NSString *ATLFilesDirectory(void) {
 
 - (void)openLocalFiles {
     UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"本机文件" message:@"结果文件包含账号和密码，请妥善保管。" preferredStyle:UIAlertControllerStyleActionSheet];
-    for (NSString *name in @[@"config.txt", @"results.txt"]) {
+    for (NSString *name in @[@"config.txt", @"results.txt", @"纯手机运行说明.txt"]) {
         BOOL edit = [name isEqualToString:@"config.txt"];
-        [menu addAction:[UIAlertAction actionWithTitle:edit ? @"编辑配置" : @"查看结果" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [menu addAction:[UIAlertAction actionWithTitle:edit ? @"编辑配置" : ([name isEqual:@"results.txt"]?@"查看结果":@"运行说明") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             ATLLocalTextController *controller = [ATLLocalTextController new];
             controller.fileName = name; controller.editable = edit;
             [self.navigationController pushViewController:controller animated:YES];
@@ -151,6 +153,8 @@ static NSString *ATLFilesDirectory(void) {
             NSLog(@"[ATLite] seed failed: %@", error);
     }
     NSString *bundledImages=[[NSBundle mainBundle].resourcePath stringByAppendingPathComponent:@"PhoneImages"];
+    NSString *localFiles=ATLFilesDirectory();NSString *help=localFiles.length?[localFiles stringByAppendingPathComponent:@"纯手机运行说明.txt"]:nil;
+    if(help && ![NSFileManager.defaultManager fileExistsAtPath:help]){NSString *bundled=[[NSBundle mainBundle] pathForResource:@"纯手机运行说明" ofType:@"txt"];if(bundled)[NSFileManager.defaultManager copyItemAtPath:bundled toPath:help error:nil];}
     for(NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:bundledImages error:nil]){
         NSString *target=[ATLImagesDir() stringByAppendingPathComponent:name];
         if(![NSFileManager.defaultManager fileExistsAtPath:target])

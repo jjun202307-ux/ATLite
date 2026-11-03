@@ -2,6 +2,7 @@
 #import "ATLRegistrationJob.h"
 #import "ATLRegistrationBackup.h"
 #import <CommonCrypto/CommonDigest.h>
+#import <math.h>
 #import "ATLPhoneNames.h"
 
 static void PFError(NSError **e,NSString *s){if(e)*e=[NSError errorWithDomain:@"ATLPhoneFlow" code:1 userInfo:@{NSLocalizedDescriptionKey:s}];}
@@ -59,7 +60,7 @@ static NSMutableDictionary *PFConfig(NSString *base,NSError **error){
  return result;
 }
 static BOOL PFSave(ATLRegStore *store,NSDictionary *state,NSError **error){if(!ATLBackupSave(store,state)){PFError(error,@"手机断点保存失败，停止后续动作");return NO;}return YES;}
-static NSDictionary *PFSummary(NSDictionary *s){return @{@"next":s[@"next"]?:@0,@"state":s[@"state"]?:@"ready",@"email":s[@"config"][@"EMAIL"]?:@"",@"job":s[@"job"]?:@""};}
+static NSDictionary *PFSummary(NSDictionary *s){return @{@"next":s[@"next"]?:@0,@"state":s[@"state"]?:@"ready",@"email":s[@"config"][@"EMAIL"]?:@"",@"job":s[@"job"]?:@"",@"retry_ms":@((NSInteger)ceil(MAX(0,[s[@"retryAfter"] doubleValue]-NSDate.date.timeIntervalSince1970)*1000))};}
 static NSDictionary *PFPayload(NSDictionary *c,NSString *identifier){return @{@"id":identifier,@"email":c[@"EMAIL"]?:@"",@"username":c[@"USERNAME"]?:@"",@"fullName":c[@"FULL_NAME"]?:@"",@"password":c[@"PASSWORD"]?:@"",@"zip":[c[@"ZIP"] length]?c[@"ZIP"]:@"11714",@"pickup_api":c[@"PICKUP_API"]?:@"",@"country":[c[@"COUNTRY"] length]?c[@"COUNTRY"]:@"美国"};}
 
 NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPhoneFlowStopped stopped,NSError **error){
@@ -78,8 +79,13 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    if(!ATLRegistrationPayloadValid(PFPayload(config,@"preflight"))){PFError(error,@"邮箱、姓名、用户名、密码或ZIP配置格式不正确，未执行准备操作");return nil;}
    NSURLComponents *mailURL=[NSURLComponents componentsWithString:config[@"PICKUP_API"]];NSMutableArray *mailboxes=[NSMutableArray array];for(NSURLQueryItem *q in mailURL.queryItems)if([q.name isEqual:@"e"])[mailboxes addObject:[[q.value componentsSeparatedByString:@":"] firstObject]?:@""];
    if(![mailURL.scheme isEqual:@"https"] || ![mailURL.host.lowercaseString isEqual:@"api.wdmail.top"] || ![mailURL.path isEqual:@"/m"] || mailURL.port || mailURL.user || mailURL.password || mailboxes.count!=1 || ![[mailboxes[0] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]]){PFError(error,@"取信链接格式不正确或与邮箱不一致，未执行准备操作");return nil;}
-   if(s && ![s[@"config"][@"EMAIL"] isEqual:config[@"EMAIL"]]){if(![@[@"done",@"sms_required"] containsObject:s[@"state"]]){PFError(error,@"旧邮箱任务尚未结束，不能换账号覆盖断点");return nil;}s=nil;}
+   if(s && ![s[@"config"][@"EMAIL"] isEqual:config[@"EMAIL"]]){
+    if(![@[@"done",@"sms_required"] containsObject:s[@"state"]]){PFError(error,@"旧邮箱任务尚未结束，不能换账号覆盖断点");return nil;}
+    if([s[@"state"] isEqual:@"done"]){NSString *reg=[base stringByAppendingPathComponent:@"Registration"];NSError *readError=nil;NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],&readError);if(job){if(![job[@"state"] isEqual:@"done"] || !ATLRegistrationClear(reg,s[@"job"],error))return nil;}else if(readError.code!=404){if(error)*error=readError;return nil;}}
+    s=nil;
+   }
    if(!s){
+    struct stat oldJob;NSString *oldPath=[base stringByAppendingPathComponent:@"Registration/registration-job.json"];if(lstat(oldPath.fileSystemRepresentation,&oldJob)==0 || errno!=ENOENT){PFError(error,@"手机仍有已有注册任务，请先核对，不执行新的准备操作");return nil;}
     NSString *results=[NSString stringWithContentsOfFile:[base stringByAppendingPathComponent:@"Local/Files/results.txt"] encoding:NSUTF8StringEncoding error:nil];
     for(NSString *line in [results componentsSeparatedByString:@"\n"]){NSArray *f=[line componentsSeparatedByString:@"----"];if(f.count==7 && [[f[1] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]] && [@[@"完成",@"已完成",@"需要接短信码"] containsObject:f[5]]){PFError(error,@"该邮箱已有完成结果，不会再次注册");return nil;}}
     s=[@{@"config":config,@"next":@0,@"state":@"ready",@"attempts":@{}} mutableCopy];if(!PFSave(&store,s,error))return nil;
@@ -89,6 +95,8 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
   if(!s){PFError(error,@"请先启动完整流程");return nil;}
   if([action isEqual:@"status"])return PFSummary(s);
   if([action isEqual:@"stage_begin"]){
+   if([s[@"retryAfter"] doubleValue]>NSDate.date.timeIntervalSince1970){PFError(error,@"当前断点仍需等待15秒重试间隔");return nil;}
+   if(stage==11 && [s[@"state"] isEqual:@"running"])s[@"state"]=@"ready"; // No UI or submission in this stage; same saved job ID is reused.
    if(stage==13 && [s[@"state"] isEqual:@"running"]){NSDictionary *job=ATLRegistrationStatus([base stringByAppendingPathComponent:@"Registration"],s[@"job"],error);if(!job)return nil;if([@[@"wait_code",@"code_ready"] containsObject:job[@"state"]])s[@"state"]=@"ready";}
    if(stage!=[s[@"next"] integerValue] || [s[@"state"] isEqual:@"running"]){PFError(error,@"断点阶段不匹配或上次动作未确认，停止重放");return nil;}
    NSMutableDictionary *attempts=[s[@"attempts"] mutableCopy];NSString *key=[@(stage) stringValue];NSInteger count=[attempts[key] integerValue];if(count>=3){PFError(error,@"当前步骤已执行3次，请查看日志");return nil;}
@@ -96,13 +104,14 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
   }
   if([action isEqual:@"stage_done"] || [action isEqual:@"stage_failed"]){
    if(stage!=[s[@"next"] integerValue] || ![s[@"state"] isEqual:@"running"]){PFError(error,@"阶段保存状态不匹配");return nil;}
-   s[@"state"]=@"ready";if([action isEqual:@"stage_done"])s[@"next"]=@(stage+1);if(!PFSave(&store,s,error))return nil;return PFSummary(s);
+   s[@"state"]=@"ready";if([action isEqual:@"stage_done"]){s[@"next"]=@(stage+1);[s removeObjectForKey:@"retryAfter"];}else s[@"retryAfter"]=@(NSDate.date.timeIntervalSince1970+15);if(!PFSave(&store,s,error))return nil;return PFSummary(s);
   }
   NSString *reg=[base stringByAppendingPathComponent:@"Registration"];NSDictionary *c=s[@"config"];
   if([action isEqual:@"sms"]){
-   NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],error);if(!job)return nil;
-   if(![job[@"state"] isEqual:@"review"] && !ATLRegistrationAdvance(reg,s[@"job"],ATL_REG_FAILED,error))return nil;
-   if(!ATLRegistrationClear(reg,s[@"job"],error))return nil;
+   if(![s[@"state"] isEqual:@"sms_pending"]){NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],error);if(!job)return nil;if(![job[@"state"] isEqual:@"review"] && !ATLRegistrationAdvance(reg,s[@"job"],ATL_REG_FAILED,error))return nil;s[@"state"]=@"sms_pending";if(!PFSave(&store,s,error))return nil;}
+   NSError *readError=nil;NSDictionary *existingJob=ATLRegistrationStatus(reg,s[@"job"],&readError);
+   if(existingJob){if(![existingJob[@"state"] isEqual:@"review"] || !ATLRegistrationClear(reg,s[@"job"],error))return nil;}
+   else if(readError.code!=404){if(error)*error=readError;return nil;}
    if(!ATLBackupExport(reg,@{@"id":s[@"job"],@"state":@"sms_required"})){PFError(error,@"短信验证结果保存失败，保留本机备份");return nil;}
    s[@"state"]=@"sms_required";if(!PFSave(&store,s,error))return nil;return PFSummary(s);
   }
@@ -111,11 +120,11 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    s[@"next"]=@13;s[@"state"]=@"ready";if(!PFSave(&store,s,error))return nil;return PFSummary(s);
   }
   if([action isEqual:@"prepare_account"]){
-   if(s[@"job"]){NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],error);return job?@{@"state":job[@"state"],@"job":s[@"job"]}:nil;}
+   if(s[@"job"]){NSError *readError=nil;NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],&readError);if(job)return @{@"state":job[@"state"],@"job":s[@"job"]};if(readError.code!=404){if(error)*error=readError;return nil;}}
    NSString *page=PFFetch(c[@"EMAIL"],c[@"PICKUP_API"],stopped,error);if(!page)return nil;
    NSString *username=c[@"USERNAME"],*full=c[@"FULL_NAME"],*password=c[@"PASSWORD"];
    if(!username.length || !full.length || !password.length){PFError(error,@"本机配置还需填写USERNAME、FULL_NAME和PASSWORD；此版本不自动猜测资料");return nil;}
-   NSString *identifier=NSUUID.UUID.UUIDString;
+   NSString *identifier=s[@"job"]?:NSUUID.UUID.UUIDString;
    NSDictionary *payload=PFPayload(c,identifier);
    // Save the identity before creation; a crash never silently generates a second job.
    s[@"job"]=identifier;s[@"baseline"]=PFHash(page);if(!PFSave(&store,s,error))return nil;
@@ -134,6 +143,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
   if([action isEqual:@"finish"]){
    if([s[@"state"] isEqual:@"sms_required"])return PFSummary(s);
    NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],error);if(![job[@"state"] isEqual:@"done"]){PFError(error,@"手机任务尚未确认完成，不能标记成功");return nil;}
+   if(!ATLBackupExport(reg,job)){PFError(error,@"已完成但TXT写入失败，保留任务供补写");return nil;}
    s[@"state"]=@"done";if(!PFSave(&store,s,error))return nil;return PFSummary(s);
   }
   PFError(error,@"不支持的手机流程操作");return nil;

@@ -17,7 +17,7 @@ static NSDictionary *ATLBackupRead(ATLRegStore *s){
  NSData *d=[NSData dataWithBytes:b length:n];memset(b,0,sizeof(b));id p=[NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
  return [p isKindOfClass:NSDictionary.class]?p:nil;
 }
-static BOOL ATLBackupCapture(NSString *directory,NSDictionary *payload){
+static inline BOOL ATLBackupCapture(NSString *directory,NSDictionary *payload){
  NSString *path=ATLBackupDirectory(directory,payload[@"id"]);
  if(![NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil])return NO;
  ATLRegStore s;if(!ATLRegOpen(&s,path.fileSystemRepresentation))return NO;

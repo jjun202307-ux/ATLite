@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import "../shared/ATLPhoneFlow.h"
 #import <sys/stat.h>
+static void expireRetry(NSString *base){NSString *path=[base stringByAppendingPathComponent:@"PhoneFlow/registration-job.json"];NSMutableDictionary *s=[[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path] options:0 error:nil] mutableCopy];s[@"retryAfter"]=@0;[[NSJSONSerialization dataWithJSONObject:s options:0 error:nil] writeToFile:path atomically:YES];chmod(path.fileSystemRepresentation,0600);}
 int main(){@autoreleasepool{
  NSCAssert([ATLPhoneMailCode(@"Your verification code is 012345") isEqual:@"012345"],@"leading zero");
  NSCAssert(ATLPhoneMailCode(@"Order 123456, 2026/11/03")==nil,@"unrelated digits");
@@ -17,10 +18,13 @@ int main(){@autoreleasepool{
  NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"first attempt");
  NSCAssert(!ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"no replay of running side effect");
  NSCAssert(ATLPhoneFlow(base,@"stage_failed",0,nil,&error),@"failed");
+ NSCAssert(!ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"restart cannot bypass fifteen seconds");expireRetry(base);
  NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"second attempt");
  NSCAssert(ATLPhoneFlow(base,@"stage_failed",0,nil,&error),@"failed2");
+ expireRetry(base);
  NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"third attempt");
  NSCAssert(ATLPhoneFlow(base,@"stage_failed",0,nil,&error),@"failed3");
+ expireRetry(base);
  NSCAssert(!ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"persisted three attempts");
  NSCAssert(!ATLPhoneFlow(base,@"stage_done",1,nil,&error),@"wrong stage rejected");
  [NSFileManager.defaultManager removeItemAtPath:base error:nil];return 0;

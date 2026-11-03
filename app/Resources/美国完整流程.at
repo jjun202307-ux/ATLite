@@ -1296,8 +1296,9 @@ local function waitCode()
 end
 if screenWidth()~=414 or screenHeight()~=896 then error('PHONE_SIZE_MISMATCH') end
 local state=phoneFlow('begin')
+if state.state=='sms_pending' then phoneFlow('sms');log('已补写短信验证结果，本轮完成');return end
 if state.state=='done' or state.state=='sms_required' then log('该账号已经完成，不会重复注册');return end
-if state.job~='' then
+if state.job~='' and state.next>11 then
  local job=phoneFlow('job_status')
  if job.state=='done' then phoneFlow('finish');log('已恢复完成记录');return end
  if job.state=='review' then
@@ -1330,11 +1331,13 @@ local stages={
 for index=state.next+1,#stages do
  local item=stages[index]
  for attempt=1,3 do
+  local checkpoint=phoneFlow('status');if checkpoint.retry_ms>0 then msleep(checkpoint.retry_ms) end
   phoneFlow('stage_begin',index-1);log('阶段开始：'..item[1])
   local ok,problem=pcall(item[2])
-  if ok then phoneFlow('stage_done',index-1);log('阶段完成：'..item[1]);break end
+  if ok then local current=phoneFlow('status');if current.state=='sms_required' then log('需要接短信码，本轮完成并已保存');return end;phoneFlow('stage_done',index-1);log('阶段完成：'..item[1]);break end
   local message=tostring(problem)
-  if index>=12 or has(message,'_STOP') or has(message,'_PAUSE') or has(message,'SMS_REQUIRED') then error(message) end
+  if has(message,'SMS_REQUIRED') then phoneFlow('sms');log('需要接短信码，本轮完成并已保存');return end
+  if index>=13 or has(message,'_STOP') or has(message,'_PAUSE') then error(message) end
   phoneFlow('stage_failed',index-1)
   if attempt>=3 then error(message) end
   log('当前步骤15秒后重试：'..item[1]);msleep(15000)
