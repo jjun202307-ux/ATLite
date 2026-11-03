@@ -33,7 +33,7 @@ static BOOL ATLBackupCapture(NSString *directory,NSDictionary *payload){
 // Failure leaves the private archive intact; Status/Recover retry without rerunning UI.
 static BOOL ATLBackupExport(NSString *directory,NSDictionary *job){
  NSString *state=job[@"state"];
- NSDictionary *labels=@{@"pending":@"待手机处理",@"review":@"待核对",@"error":@"失败",@"done":@"完成",@"wait_code":@"等待验证码"};
+ NSDictionary *labels=@{@"pending":@"待手机处理",@"preparing":@"注册中",@"ready":@"注册中",@"submitting":@"注册中",@"code_ready":@"注册中",@"entering_code":@"注册中",@"review":@"待核对",@"error":@"失败",@"done":@"完成",@"wait_code":@"等待验证码"};
  NSString *label=labels[state];if(!label)return YES;
  NSString *archive=ATLBackupDirectory(directory,job[@"id"]);struct stat st;
  if(lstat(archive.fileSystemRepresentation,&st)!=0)return errno==ENOENT; // Legacy jobs had no archive.
@@ -56,8 +56,22 @@ static BOOL ATLBackupExport(NSString *directory,NSDictionary *job){
     close(fd);
    }else if(errno!=ENOENT)return NO;
    NSString *old=[[NSString alloc]initWithData:all encoding:NSUTF8StringEncoding];if(!old || (old.length && ![old hasSuffix:@"\n"]))return NO;
-   NSString *needle=[line substringToIndex:line.length-1];if([[old componentsSeparatedByString:@"\n"] containsObject:needle])return YES;
-   [all appendData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+   // Email is the stable account identity even before a username is generated.
+   // Last state wins, including legacy duplicates; preserve unrelated/malformed rows.
+   NSMutableArray *order=[NSMutableArray array];NSMutableDictionary *latest=[NSMutableDictionary dictionary];
+   NSArray *incoming=[[old stringByAppendingString:line] componentsSeparatedByString:@"\n"];
+   NSUInteger rawIndex=0;
+   for(NSString *row in incoming){
+    if(!row.length)continue;
+    NSArray *fields=[row componentsSeparatedByString:@"----"];
+    NSString *key=(fields.count==7 && [fields[1] length])?[@"email:" stringByAppendingString:[fields[1] lowercaseString]]:[NSString stringWithFormat:@"raw:%lu",(unsigned long)rawIndex++];
+    if(!latest[key])[order addObject:key];latest[key]=row;
+   }
+   NSMutableString *updated=[NSMutableString string];
+   for(NSString *key in order)[updated appendFormat:@"%@\n",latest[key]];
+   if([updated isEqual:old])return YES;
+   all=[[updated dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+   if(!all || all.length>16*1024*1024)return NO;
    NSString *temp=[@".result-" stringByAppendingString:NSUUID.UUID.UUIDString];
    fd=openat(out.dirfd,temp.UTF8String,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return NO;
    BOOL ok=ATLRegPrivateFile(fd);size_t done=0;while(ok && done<all.length){ssize_t n=write(fd,(const char *)all.bytes+done,all.length-done);if(n<0 && errno==EINTR)continue;if(n<=0){ok=NO;break;}done+=(size_t)n;}

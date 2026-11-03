@@ -82,7 +82,7 @@ static NSDictionary *ATLRegClaim(NSString *directory,NSString *jobID,NSError **e
  @try {NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || (jobID && !ATLRegMatch(job,jobID,error)))return nil;ATLRegState state,next;
   if(!ATLRegStateForName(job[@"state"],&state) || !ATLRegStep(state,ATL_REG_CLAIM,&next)){ATLRegError(error,409,@"任务不能重复领取");return nil;}
   NSMutableDictionary *p=[job mutableCopy];[p removeObjectForKey:@"state"];if(!ATLRegValidPayload(p)){ATLRegError(error,500,@"任务资料无效");return nil;}
-  job[@"state"]=ATLRegName(next);return ATLRegSave(&store,job,error)?[job copy]:nil;
+  job[@"state"]=ATLRegName(next);if(!ATLRegSave(&store,job,error))return nil;ATLBackupExport(directory,job);return [job copy];
  } @finally {ATLRegClose(&store);}
 }
 NSDictionary *ATLRegistrationClaim(NSString *directory,NSString *jobID,NSError **error){

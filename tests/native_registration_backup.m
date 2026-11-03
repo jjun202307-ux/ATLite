@@ -20,6 +20,7 @@ int main(void){@autoreleasepool{
  assert(ATLRegistrationStatus(jobs,p[@"id"],&e));
  NSString *path=[files stringByAppendingPathComponent:@"results.txt"];
  NSString *first=[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+ assert([first componentsSeparatedByString:@"\n"].count==2); // one account, one current row
  assert([first containsString:@"dummy_user----dummy@example.invalid----Aa1!----https://example.invalid/mail----美国----待核对----"]);
  assert(ATLRegistrationStatus(jobs,p[@"id"],&e));assert([[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] isEqual:first]);
  assert(ATLRegistrationClear(jobs,p[@"id"],&e));assert([fm fileExistsAtPath:path]);
@@ -32,6 +33,7 @@ int main(void){@autoreleasepool{
  assert(ATLRegistrationClaimPending(jobs,&e));assert(ATLRegistrationAdvance(jobs,p[@"id"],ATL_REG_FIELDS_READY,&e));assert(ATLRegistrationAdvance(jobs,p[@"id"],ATL_REG_BEGIN_SUBMIT,&e));assert(ATLRegistrationAdvance(jobs,p[@"id"],ATL_REG_VERIFICATION_SEEN,&e));
  assert(ATLRegistrationSetCode(jobs,p[@"id"],@"1234",&e));assert(ATLRegistrationClaimCode(jobs,&e));assert(ATLRegistrationAdvance(jobs,p[@"id"],ATL_REG_SUCCESS_CONFIRMED,&e));
  NSString *completed=[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];assert([completed containsString:@"----完成----20"]);
+ assert([completed componentsSeparatedByString:@"\n"].count==2 && ![completed containsString:@"----待核对----"]);
  assert(ATLRegistrationStatus(jobs,p[@"id"],&e));assert([[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] isEqual:completed]);
  [fm removeItemAtPath:root error:nil];return 0;
 }}
