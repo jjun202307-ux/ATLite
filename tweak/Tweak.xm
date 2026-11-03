@@ -3,7 +3,7 @@
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
 #import "../shared/ATLPhoneFlow.h"
-// ATLiteTweak v0.3.31 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.32 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -1339,7 +1339,7 @@ static int l_phoneFlow(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.31 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.32 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1558,6 +1558,11 @@ static int ATInitializeLua(lua_State *L) {
     return 0;
 }
 
+static NSString *ATLuaMessage(lua_State *L) {
+    if(lua_type(L,-1)!=LUA_TSTRING)return @"non-string Lua error";
+    size_t length=0;const char *bytes=lua_tolstring(L,-1,&length);
+    return [[NSString alloc]initWithBytes:bytes length:length encoding:NSUTF8StringEncoding]?:@"invalid UTF-8 Lua error";
+}
 static BOOL ATExecuteLoadedChunk(lua_State *L, NSString *path) {
     NSError *error = nil;
     NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:path error:&error];
@@ -1573,7 +1578,7 @@ static BOOL ATExecuteLoadedChunk(lua_State *L, NSString *path) {
                                  path.lastPathComponent.UTF8String, "t");
     if (!status) status = lua_pcall(L, 0, 0, 0);
     if (status) {
-        ATLog(@"lua error (%@): %s", path.lastPathComponent, lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "non-string Lua error");
+        ATLog(@"lua error (%@): %@", path.lastPathComponent, ATLuaMessage(L));
         lua_pop(L, 1); return NO;
     }
     return YES;
@@ -1591,7 +1596,7 @@ static void ATPlayLuaFile(NSString *scriptPath) {
         if (!L) { ATLog(@"Lua VM allocation failed"); return; }
         lua_sethook(L, ATLuaTimeoutHook, LUA_MASKCOUNT, 10000);
         lua_pushcfunction(L, ATInitializeLua);
-        if (lua_pcall(L, 0, 0, 0)) { ATLog(@"Lua bootstrap failed: %s", lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "non-string Lua error"); return; }
+        if (lua_pcall(L, 0, 0, 0)) { ATLog(@"Lua bootstrap failed: %@", ATLuaMessage(L)); return; }
         NSString *extensions = [ATLibsDir() stringByAppendingPathComponent:@"Extensions.lua"];
         if (!ATExecuteLoadedChunk(L, extensions)) return;
         if (ATExecuteLoadedChunk(L, scriptPath)) ATLog(@"script finished: %@", scriptPath.lastPathComponent);
@@ -1847,7 +1852,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.31 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.32 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

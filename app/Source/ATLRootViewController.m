@@ -31,13 +31,14 @@ static NSString *ATLFilesDirectory(void) {
 @interface ATLLocalTextController : UIViewController
 @property(nonatomic,copy) NSString *fileName;
 @property(nonatomic,assign) BOOL editable;
+@property(nonatomic,assign) BOOL scriptFile;
 @property(nonatomic,strong) UITextView *editor;
 @end
 
 @implementation ATLLocalTextController
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = self.editable ? @"本机配置" : ([self.fileName isEqual:@"纯手机运行说明.txt"]?@"运行说明":@"本机结果");
+    self.title = self.scriptFile?self.fileName:(self.editable ? @"本机配置" : ([self.fileName isEqual:@"纯手机运行说明.txt"]?@"运行说明":@"本机结果"));
     self.view.backgroundColor = UIColor.systemBackgroundColor;
     self.editor = [[UITextView alloc] initWithFrame:self.view.bounds];
     self.editor.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -45,31 +46,37 @@ static NSString *ATLFilesDirectory(void) {
     self.editor.editable = self.editable;
     self.editor.autocorrectionType = UITextAutocorrectionTypeNo;
     self.editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.editor.smartQuotesType = UITextSmartQuotesTypeNo;
+    self.editor.smartDashesType = UITextSmartDashesTypeNo;
+    self.editor.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
     [self.view addSubview:self.editor];
-    NSString *dir = ATLFilesDirectory();
+    NSString *dir = self.scriptFile?ATLScriptsDir():ATLFilesDirectory();
     NSString *path = dir.length ? [dir stringByAppendingPathComponent:self.fileName] : nil;
     NSError *error = nil;
+    NSDictionary *attributes=path?[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil]:nil;
+    if(self.scriptFile && [attributes fileSize]>1024*1024){self.editor.editable=NO;self.editor.text=@"脚本超过1MiB，不能编辑或运行。";return;}
     NSString *text = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&error] : nil;
     if (text) self.editor.text = text;
-    else if (error.code == NSFileReadNoSuchFileError && self.editable) self.editor.text = @"[general]\nPROXY_RESET_URL=\n";
+    else if (error.code == NSFileReadNoSuchFileError && self.editable) self.editor.text = self.scriptFile?@"-- Lua脚本，UTF-8编码\nlog(\"我的脚本开始\")\n":@"[general]\nPROXY_RESET_URL=\n";
     else if (error.code == NSFileReadNoSuchFileError) self.editor.text = @"";
     else {
         self.editor.editable = NO;
         self.editor.text = @"文件无法读取，请检查本机目录权限。";
         return;
     }
-    if(self.editable && [self.editor.text rangeOfString:@"EMAIL=" options:NSCaseInsensitiveSearch].location==NSNotFound)
+    if(self.editable && !self.scriptFile && [self.editor.text rangeOfString:@"EMAIL=" options:NSCaseInsensitiveSearch].location==NSNotFound)
         self.editor.text=[self.editor.text stringByAppendingString:@"\n[phone]\nEMAIL=\nPICKUP_API=\nUSERNAME=\nFULL_NAME=\nPASSWORD=\nCOUNTRY=美国\nZIP=11714\n"];
     if (self.editable) self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"保存" style:UIBarButtonItemStyleDone target:self action:@selector(saveFile)];
 }
 - (void)saveFile {
-    NSString *dir = ATLFilesDirectory();
+    NSString *dir = self.scriptFile?ATLScriptsDir():ATLFilesDirectory();
     NSError *error = nil;
     BOOL ok = dir && [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:&error];
     NSString *path = [dir stringByAppendingPathComponent:self.fileName];
+    if(ok && self.scriptFile && [self.editor.text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]>1024*1024)ok=NO;
     if (ok) ok = [self.editor.text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error];
     if (ok) ok = [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions:@0600} ofItemAtPath:path error:&error];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:ok ? @"已保存" : @"保存失败" message:ok ? @"配置已保存到手机。" : @"请检查本机目录权限后重试。" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:ok ? @"已保存" : @"保存失败" message:ok ? (self.scriptFile?@"脚本已保存，返回列表即可运行。":@"配置已保存到手机。") : @"请检查文件大小与本机目录权限后重试。" preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
@@ -82,6 +89,21 @@ static NSString *ATLFilesDirectory(void) {
 @end
 
 @implementation ATLRootViewController
+- (void)viewWillAppear:(BOOL)animated {[super viewWillAppear:animated];if(self.scripts)[self refresh];}
+
+- (void)newScript {
+    UIAlertController *sheet=[UIAlertController alertControllerWithTitle:@"新建Lua脚本" message:@"使用.at或.lua后缀" preferredStyle:UIAlertControllerStyleAlert];
+    [sheet addTextFieldWithConfigurationHandler:^(UITextField *field){field.text=@"我的脚本.at";field.autocorrectionType=UITextAutocorrectionTypeNo;field.autocapitalizationType=UITextAutocapitalizationTypeNone;}];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"创建" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){
+        NSString *name=[sheet.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];NSString *ext=name.pathExtension.lowercaseString;
+        if(!name.length || name.length>128 || ![name isEqual:name.lastPathComponent] || [name hasPrefix:@"."] || [name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound || ![@[@"at",@"lua"] containsObject:ext] || [NSFileManager.defaultManager fileExistsAtPath:[ATLScriptsDir() stringByAppendingPathComponent:name]]){
+            UIAlertController *bad=[UIAlertController alertControllerWithTitle:@"文件名无效或已存在" message:@"请使用不带路径、以.at或.lua结尾的新文件名。" preferredStyle:UIAlertControllerStyleAlert];[bad addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];[self presentViewController:bad animated:YES completion:nil];return;
+        }
+        ATLLocalTextController *editor=[ATLLocalTextController new];editor.fileName=name;editor.editable=YES;editor.scriptFile=YES;[self.navigationController pushViewController:editor animated:YES];
+    }]];
+    [self presentViewController:sheet animated:YES completion:nil];
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -109,7 +131,7 @@ static NSString *ATLFilesDirectory(void) {
                                                             target:self action:@selector(stopScript)];
     stop.tintColor = [UIColor systemRedColor];
     self.navigationItem.rightBarButtonItems = @[stop, log, refresh];
-    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"本机文件" style:UIBarButtonItemStylePlain target:self action:@selector(openLocalFiles)];
+    self.navigationItem.leftBarButtonItems = @[[[UIBarButtonItem alloc] initWithTitle:@"本机文件" style:UIBarButtonItemStylePlain target:self action:@selector(openLocalFiles)],[[UIBarButtonItem alloc] initWithTitle:@"新建" style:UIBarButtonItemStylePlain target:self action:@selector(newScript)]];
 
     // 启动期任何异常都不允许杀死 App（v0.1.0 "打不开"的教训：启动链路必须防御）
     @try {
@@ -268,6 +290,7 @@ static NSString *ATLFilesDirectory(void) {
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:name
                                                                   message:nil
                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"编辑脚本" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){ATLLocalTextController *editor=[ATLLocalTextController new];editor.fileName=name;editor.editable=YES;editor.scriptFile=YES;[self.navigationController pushViewController:editor animated:YES];}]];
     [sheet addAction:[UIAlertAction actionWithTitle:@"▶ 运行" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         [self runScript:name];
     }]];
