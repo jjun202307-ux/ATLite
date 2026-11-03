@@ -74,7 +74,7 @@ class RuntimeContracts(unittest.TestCase):
             self.assertNotIn('UIPasteboard', body)
         helper=SRC[SRC.index('static void ATTypingPause'):]
         helper=helper[:helper.index('\n}')]
-        self.assertIn('40+arc4random_uniform(261)', helper)
+        self.assertIn('100+arc4random_uniform(401)', helper)
         self.assertIn('ATCheckScript(L)', helper)
         correction=SRC[SRC.index('static BOOL ATTypingMaybeCorrect'):]
         correction=correction[:correction.index('\n}')]
