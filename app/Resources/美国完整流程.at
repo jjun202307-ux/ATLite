@@ -1206,10 +1206,14 @@ error('验证码提交后结果不明确，请人工核对')
 
 end
 
+local function readFrame(body)
+ if type(withScreen)=='function' then return withScreen(body) end
+ return body()
+end
 local function run(name)
  local output={};local realLog=log
  log=function(s) output[#output+1]=tostring(s);realLog(s) end
- local ok,result=pcall(parts[name]);log=realLog
+ local ok,result=pcall(function() return readFrame(parts[name]) end);log=realLog
  if not ok then error(result) end
  return table.concat(output,'\n')
 end

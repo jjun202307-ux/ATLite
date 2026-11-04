@@ -3,7 +3,9 @@
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
 #import "../shared/ATLPhoneFlow.h"
-// ATLiteTweak v0.3.35 — AutoTouch-style script runner (Dopamine roothide only)
+#import "../shared/ATLEnergySettings.h"
+static void ATEnergyInvalidate(void);
+// ATLiteTweak v0.3.36 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -347,6 +349,7 @@ static BOOL gASCIIKeys[256];
 //   hand（父）：index=0 identity=0 x/y/z=0 压力=0 mask=Touch range=0 touch=true
 //   finger（子）：index 从 1 起（finger+1）、identity=2、mask 动态、tipPressure=0
 static void ATSimulateTouch(int action, int finger, float x, float y) {
+    ATEnergyInvalidate();
     if (!gHIDReady || !gTouchSenderID || !_AT_IOHIDEventSetSenderID) return;
     if (finger < 0 || finger >= 10 || !isfinite(x) || !isfinite(y)) return;
     CGSize screen=ATScreenSize();
@@ -396,6 +399,7 @@ static void ATSimulateTouch(int action, int finger, float x, float y) {
 // keyDown/keyUp: consumer page (0x0C) 用法码，与 AutoTouch KEY_TYPE 一致
 #define AT_HID_USAGE_PAGE_CONSUMER 0x0C
 static void ATSimulateKey(BOOL down, int usage) {
+    ATEnergyInvalidate();
     if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent) return;
     if (usage < 0 || usage > 65535) return;
     ATThrottleEvents();
@@ -409,6 +413,7 @@ static void ATSimulateKey(BOOL down, int usage) {
 }
 
 static BOOL ATASCIIKeyEvent(BOOL down, uint16_t usage) {
+    ATEnergyInvalidate();
     if (!gHIDReady || !_AT_IOHIDEventCreateKeyboardEvent || usage > 255) return NO;
     ATThrottleEvents();
     IOHIDEventRef event = _AT_IOHIDEventCreateKeyboardEvent(kCFAllocatorDefault,
@@ -510,15 +515,30 @@ static CGSize ATScreenPixelSize(void) {
     return px;
 }
 
-typedef struct { uint8_t *rgba; int w, h; } ATBitmap;
+typedef struct { uint8_t *rgba; int w, h; BOOL borrowed; } ATBitmap;
 
 // RESEARCH C3：抓屏位图是物理像素，Lua 坐标是点。
 // 自适应换算（位图宽/屏幕点宽），不假设 2x/3x —— 1x 时恒为 1，无损害。
 static double ATCaptureScale(const ATBitmap *b);
 
 static void ATFreeBitmap(ATBitmap *b) {
-    if (b->rgba) { free(b->rgba); b->rgba = NULL; }
+    if (b->rgba && !b->borrowed) free(b->rgba);
+    b->rgba=NULL; b->borrowed=NO;
     b->w = b->h = 0;
+}
+
+static BOOL gEnergyEnabled=NO;
+static unsigned gEnergyDepth=0;
+static ATBitmap gEnergyFrame={0};
+static ATTextResult gEnergyOCR={0};
+static BOOL gEnergyOCRValid=NO;
+static NSMutableDictionary *gEnergyTemplates=nil;
+static NSUInteger gEnergyTemplateBytes=0;
+static unsigned long gEnergyTemplateClock=0;
+static unsigned long gEnergyCaptures=0,gEnergyFrameHits=0,gEnergyOCRRequests=0,gEnergyOCRHits=0,gEnergyTemplateHits=0,gEnergyTemplateDecodes=0;
+static void ATEnergyInvalidate(void) {
+    ATFreeBitmap(&gEnergyFrame);
+    gEnergyOCRValid=NO;
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +656,7 @@ static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) {
 
 // 抓主屏 → RGBA8（仅 SpringBoard 进程可用）
 static BOOL ATCaptureScreen(ATBitmap *out) {
+    if (gEnergyEnabled) gEnergyCaptures++;
     if (!gCaptureReady) return NO;
     IOSurfaceRef s = ATCaptureSurfaceWithTimeout();
     if (!s) return NO;
@@ -685,6 +706,15 @@ static inline uint8_t ATLuma(const uint8_t *px) {
 }
 
 #pragma mark - Image matching (粗到细 NCC)
+
+static BOOL ATCaptureForRead(ATBitmap *out) {
+    if (!gEnergyEnabled || !gEnergyDepth) return ATCaptureScreen(out);
+    if (!gEnergyFrame.rgba) {
+        if (!ATCaptureScreen(&gEnergyFrame)) return NO;
+    } else gEnergyFrameHits++;
+    *out=gEnergyFrame;out->borrowed=YES;
+    return YES;
+}
 
 typedef struct { uint8_t *g; int w, h; } ATGray;
 
@@ -758,6 +788,14 @@ static BOOL ATLoadTemplate(const char *nameUtf8, ATBitmap *out) {
     if (![path hasPrefix:[root stringByAppendingString:@"/"]]) return NO;
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) return NO;
+    NSDictionary *cached=gEnergyEnabled ? gEnergyTemplates[path] : nil;
+    // Compare compressed bytes as well: an in-place replacement may retain size/time.
+    if (cached && [cached[@"source"] isEqual:data]) {
+        [(NSMutableDictionary *)cached setObject:@(++gEnergyTemplateClock) forKey:@"used"];
+        out->rgba=(uint8_t *)[cached[@"pixels"] bytes];
+        out->w=[cached[@"width"] intValue];out->h=[cached[@"height"] intValue];out->borrowed=YES;
+        gEnergyTemplateHits++;return YES;
+    }
     UIImage *img = [UIImage imageWithData:data];
     if (!img) return NO;
     CGImageRef cg = img.CGImage;
@@ -773,6 +811,26 @@ static BOOL ATLoadTemplate(const char *nameUtf8, ATBitmap *out) {
     CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), cg);
     CGContextRelease(ctx);
     CGColorSpaceRelease(cs);
+    if (gEnergyEnabled && data.length+(NSUInteger)w*h*4<=8*1024*1024) {
+        if (!gEnergyTemplates) gEnergyTemplates=[NSMutableDictionary dictionary];
+        if (cached) {
+            gEnergyTemplateBytes-=[cached[@"source"] length]+[cached[@"pixels"] length];
+            [gEnergyTemplates removeObjectForKey:path];
+        }
+        NSUInteger required=data.length+(NSUInteger)w*h*4;
+        while (gEnergyTemplateBytes+required>8*1024*1024 && gEnergyTemplates.count) {
+            NSString *oldest=nil;
+            for (NSString *key in gEnergyTemplates)
+                if (!oldest || [gEnergyTemplates[key][@"used"] unsignedLongValue]<[gEnergyTemplates[oldest][@"used"] unsignedLongValue]) oldest=key;
+            NSDictionary *old=gEnergyTemplates[oldest];
+            gEnergyTemplateBytes-=[old[@"source"] length]+[old[@"pixels"] length];
+            [gEnergyTemplates removeObjectForKey:oldest];
+        }
+        NSData *pixels=[NSData dataWithBytesNoCopy:out->rgba length:(NSUInteger)w*h*4 freeWhenDone:YES];
+        gEnergyTemplates[path]=[@{@"source":data,@"pixels":pixels,@"width":@(w),@"height":@(h),@"used":@(++gEnergyTemplateClock)} mutableCopy];
+        gEnergyTemplateBytes+=required;
+        out->borrowed=YES;gEnergyTemplateDecodes++;
+    }
     return YES;
 }
 
@@ -835,6 +893,7 @@ static int l_keyUp(lua_State *L) {
 }
 // AutoTouch 语义: usleep(微秒)
 static int l_usleep(lua_State *L) {
+    ATEnergyInvalidate();
     double us = luaL_checknumber(L,1);
     if (!isfinite(us) || us < 0) return luaL_error(L, "usleep: expected finite nonnegative duration");
     // E26：分片睡眠（每片 ≤50ms 检查一次停止）。
@@ -854,6 +913,7 @@ static int l_usleep(lua_State *L) {
 }
 // ATLite 扩展: msleep(毫秒)
 static int l_msleep(lua_State *L) {
+    ATEnergyInvalidate();
     double ms = luaL_checknumber(L,1);
     if (!isfinite(ms) || ms < 0) return luaL_error(L, "msleep: expected finite nonnegative duration");
     // E26：同 l_usleep，分片检查停止
@@ -901,7 +961,7 @@ static int l_getColor(lua_State *L) {
     int x = (int)luaL_checkinteger(L, 1);   // 点坐标（Lua 层契约）
     int y = (int)luaL_checkinteger(L, 2);
     ATBitmap b = {0};
-    if (!ATCaptureScreen(&b)) { lua_pushnil(L); return 1; }
+    if (!ATCaptureForRead(&b)) { lua_pushnil(L); return 1; }
     double scale = ATCaptureScale(&b);      // 点 → 像素
     int px = (int)llround(x * scale), py = (int)llround(y * scale);
     if (px < 0 || py < 0 || px >= b.w || py >= b.h) { ATFreeBitmap(&b); lua_pushnil(L); return 1; }
@@ -917,7 +977,7 @@ static int l_findColor(lua_State *L) {
     int tol = lua_isnumber(L, 2) ? (int)lua_tointeger(L, 2) : 16;
     uint8_t cr = (color >> 16) & 0xFF, cg = (color >> 8) & 0xFF, cb = color & 0xFF;
     ATBitmap b = {0};
-    if (!ATCaptureScreen(&b)) { lua_pushnil(L); return 1; }
+    if (!ATCaptureForRead(&b)) { lua_pushnil(L); return 1; }
     int scanScale = 4, sw = b.w / scanScale, sh = b.h / scanScale;
     double ptScale = ATCaptureScale(&b);    // 像素 → 点（返回给 Lua）
     double points[10][2];
@@ -958,7 +1018,7 @@ static int l_findImage(lua_State *L) {
     ATBitmap tmpl = {0};
     if (!ATLoadTemplate(name, &tmpl)) { ATLog(@"findImage: template not found: %s", name); lua_pushnil(L); return 1; }
     ATBitmap screen = {0};
-    if (!ATCaptureScreen(&screen)) { ATFreeBitmap(&tmpl); lua_pushnil(L); return 1; }
+    if (!ATCaptureForRead(&screen)) { ATFreeBitmap(&tmpl); lua_pushnil(L); return 1; }
     double ptScale = ATCaptureScale(&screen); // 释放前取（像素→点）
     int originX=0,originY=0,regionW=screen.w,regionH=screen.h;
     if (hasRegion && !ATCorePointRegion(region[0],region[1],region[2],region[3],ptScale,
@@ -999,12 +1059,13 @@ static int ATLOCRCancelled(void *context) {
     return ATShouldStop() || ATScriptExpired();
 }
 static BOOL ATRecognizeScreen(ATTextResult *out) {
+    if (gEnergyEnabled && gEnergyDepth && gEnergyOCRValid) { *out=gEnergyOCR;gEnergyOCRHits++;return YES; }
     if (gOCRWorkerBroken) { ATLog(@"OCR disabled after unconfirmed child reap; respring required");return NO; }
     ATBitmap bitmap={0};CGImageRef image=NULL;CGImageDestinationRef destination=NULL;
     int inputFD=-1;BOOL ok=NO;
     @try {
         @autoreleasepool {
-            if (!ATCaptureScreen(&bitmap)) return NO;
+            if (!ATCaptureForRead(&bitmap)) return NO;
             image=ATCreateCGImageFromBitmap(&bitmap);
             if (!image) return NO;
             double scale=ATCaptureScale(&bitmap);
@@ -1035,6 +1096,7 @@ static BOOL ATRecognizeScreen(ATTextResult *out) {
             NSString *requestID=NSUUID.UUID.UUIDString;
             NSString *exe=[ATJBRoot() stringByAppendingPathComponent:@"Applications/ATLite.app/ATLOCRWorker"];
             NSMutableData *output=[NSMutableData dataWithLength:ATL_OCR_OUTPUT_LIMIT];
+            if (gEnergyEnabled) gEnergyOCRRequests++;
             ATLChildResult child=ATLRunChild(exe.fileSystemRepresentation,requestID.UTF8String,inputFD,
                 (char *)output.mutableBytes,output.length,ATL_OCR_TIMEOUT,ATLOCRCancelled,NULL);
             if (child.status!=ATL_CHILD_OK) {
@@ -1046,6 +1108,7 @@ static BOOL ATRecognizeScreen(ATTextResult *out) {
             NSString *error=nil;
             ok=ATLDecodeOCRReply(output,requestID,bitmap.w,bitmap.h,scale,out,&error);
             if (!ok) ATLog(@"OCR request=%@ failed: %@",requestID,error);
+            else if (gEnergyEnabled && gEnergyDepth) { gEnergyOCR=*out;gEnergyOCRValid=YES; }
         }
     } @finally {
         if (inputFD>=0) close(inputFD);
@@ -1344,13 +1407,29 @@ static int l_phoneFlow(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.35 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.36 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
 }
 
+static int l_energyMode(lua_State *L) { lua_pushboolean(L,gEnergyEnabled);return 1; }
+static int l_withScreen(lua_State *L) {
+    luaL_checktype(L,1,LUA_TFUNCTION);
+    lua_settop(L,1);
+    if (gEnergyEnabled) gEnergyDepth++;
+    int status=lua_pcall(L,0,LUA_MULTRET,0);
+    if (gEnergyEnabled) {
+        gEnergyDepth--;
+        if (!gEnergyDepth) ATEnergyInvalidate();
+    }
+    if (status) return lua_error(L);
+    ATCheckScript(L);
+    return lua_gettop(L);
+}
 static const luaL_Reg ATLuaFuncs[] = {
+    {"energyMode", l_energyMode},
+    {"withScreen", l_withScreen},
     {"phoneFlow", l_phoneFlow},
     {"touchDown", l_touchDown},
     {"touchMove", l_touchMove},
@@ -1589,6 +1668,11 @@ static BOOL ATExecuteLoadedChunk(lua_State *L, NSString *path) {
 }
 
 static void ATPlayLuaFile(NSString *scriptPath) {
+    ATEnergyInvalidate();gEnergyDepth=0;gEnergyTemplates=nil;
+    gEnergyTemplateBytes=0;gEnergyTemplateClock=0;
+    gEnergyEnabled=ATLEnergyEnabled(ATBaseDir());
+    gEnergyCaptures=gEnergyFrameHits=gEnergyOCRRequests=gEnergyOCRHits=gEnergyTemplateHits=gEnergyTemplateDecodes=0;
+    ATLog(@"energy mode=%@",gEnergyEnabled ? @"ON" : @"OFF (legacy)");
     ATMemoryBudget budget = {0, SIZE_MAX};
     lua_State *L = NULL;
     @try {
@@ -1610,6 +1694,9 @@ static void ATPlayLuaFile(NSString *scriptPath) {
         // Release injected inputs even when Lua stops during tap()'s sleep.
         @try { ATReleaseAllInputs(); }
         @catch (NSException *exception) { ATLog(@"input cleanup exception: %@", exception); }
+        ATEnergyInvalidate();gEnergyDepth=0;gEnergyTemplates=nil;
+        if (gEnergyEnabled) ATLog(@"energy summary captures=%lu frame_hits=%lu ocr_requests=%lu ocr_hits=%lu template_decodes=%lu template_hits=%lu",gEnergyCaptures,gEnergyFrameHits,gEnergyOCRRequests,gEnergyOCRHits,gEnergyTemplateDecodes,gEnergyTemplateHits);
+        gEnergyEnabled=NO;
         if (L) lua_close(L);
         ATClearRegistrationSecret();ATClearRegistrationCode();
         if(gRegistrationID[0]) {
@@ -1856,7 +1943,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.35 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.36 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

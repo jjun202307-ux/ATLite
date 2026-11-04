@@ -2,6 +2,7 @@
 #import "ATLRootViewController.h"
 #import "ATLWebServer.h"
 #import "ATLPaths.h"
+#import "../../shared/ATLEnergySettings.h"
 #import "ATLCommand.h"
 #import "ATLLogViewController.h"
 #import <ifaddrs.h>
@@ -81,6 +82,7 @@ static NSString *ATLFilesDirectory(void) {
 
 @interface ATLRootViewController ()
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIButton *energyButton;
 @property (nonatomic, strong) ATLWebServer *server;
 @property (nonatomic, strong) NSMutableArray<NSString *> *scripts;
 @end
@@ -114,7 +116,17 @@ static NSString *ATLFilesDirectory(void) {
     self.statusLabel.font = [UIFont systemFontOfSize:12];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     self.statusLabel.textColor = [UIColor darkGrayColor];
-    self.tableView.tableHeaderView = self.statusLabel;
+    UIView *header=[[UIView alloc] initWithFrame:CGRectMake(0,0,self.tableView.bounds.size.width,108)];
+    self.statusLabel.frame=CGRectMake(0,0,header.bounds.size.width,56);
+    self.statusLabel.autoresizingMask=UIViewAutoresizingFlexibleWidth;
+    [header addSubview:self.statusLabel];
+    self.energyButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    self.energyButton.frame=CGRectMake(12,56,header.bounds.size.width-24,44);
+    self.energyButton.autoresizingMask=UIViewAutoresizingFlexibleWidth;
+    self.energyButton.titleLabel.font=[UIFont systemFontOfSize:13];
+    [self.energyButton addTarget:self action:@selector(toggleEnergyMode) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:self.energyButton];
+    self.tableView.tableHeaderView=header;
 
     // E24：日志入口常驻导航栏，脚本"没反应"时一键查看 tweak 日志
     UIBarButtonItem *refresh = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
@@ -251,7 +263,23 @@ static NSString *ATLFilesDirectory(void) {
 
 #pragma mark - Data
 
+- (void)updateEnergyButton {
+    BOOL enabled=ATLEnergyEnabled(ATLBaseDir());
+    [self.energyButton setTitle:enabled ? @"☑ 节能模式（下次运行生效）" : @"☐ 节能模式（当前为老模式）" forState:UIControlStateNormal];
+    self.energyButton.accessibilityLabel=@"节能模式";
+    self.energyButton.accessibilityValue=enabled ? @"已勾选" : @"未勾选";
+}
+- (void)toggleEnergyMode {
+    NSError *error=nil;
+    if (!ATLSaveEnergyEnabled(ATLBaseDir(),!ATLEnergyEnabled(ATLBaseDir()),&error)) {
+        UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"节能设置保存失败" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    }
+    [self updateEnergyButton];
+}
 - (void)refresh {
+    [self updateEnergyButton];
     [self.scripts removeAllObjects];
     NSString *scriptsPath = ATLScriptsDir();
     NSArray *files = scriptsPath.length ? [[NSFileManager defaultManager] contentsOfDirectoryAtPath:scriptsPath error:nil] : @[];
