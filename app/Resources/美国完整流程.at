@@ -1284,7 +1284,7 @@ local function openForm()
  run('open_form')
 end
 local function waitCode()
- for i=1,30 do
+ while true do
   local page=run('observe')
   if has(page,'PAGE_BLOCKED') then error('SERVER_BLOCKED_STOP') end
   if has(page,'PAGE_PHONE_VERIFICATION') then phoneFlow('sms');return end

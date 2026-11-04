@@ -3,7 +3,7 @@
 #import "../shared/ATLChildProcess.h"
 #import "../shared/ATLOCRReply.h"
 #import "../shared/ATLPhoneFlow.h"
-// ATLiteTweak v0.3.34 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.35 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -1184,7 +1184,7 @@ static int l_getRegistrationJob(lua_State *L) {
     // Screen typing at 100..500ms per key needs a bounded registration budget.
     // It is granted once by the atomic pending-job claim; ordinary scripts keep 60s.
     lua_getglobal(L,"__atl_screen_type");
-    if(lua_isfunction(L,-1) && !gPhoneFlowStarted)gScriptDeadline=ATMonotonicNow()+180.0;
+    if(lua_isfunction(L,-1) && !gPhoneFlowStarted)gScriptDeadline=0;
     lua_pop(L,1);
     lua_createtable(L,0,5);
     lua_pushstring(L,identifier);lua_setfield(L,-2,"jobId");
@@ -1336,7 +1336,7 @@ static int l_phoneFlow(lua_State *L) {
     NSDictionary *reply=ATLPhoneFlow(ATBaseDir(),action,stage,^{return ATShouldStop() || ATScriptExpired();},&error);
     if(!reply)return luaL_error(L,"phone flow: %s",(error.localizedDescription?:@"operation failed").UTF8String);
     if([action isEqual:@"sms"]){ATClearRegistrationSecret();ATClearRegistrationCode();gRegistrationID[0]=0;}
-    if([action isEqual:@"begin"] && !gPhoneFlowStarted){gPhoneFlowStarted=YES;gScriptDeadline=ATMonotonicNow()+1800.0;}
+    if([action isEqual:@"begin"] && !gPhoneFlowStarted){gPhoneFlowStarted=YES;gScriptDeadline=0;}
     lua_createtable(L,0,(int)reply.count);
     for(NSString *key in reply){id value=reply[key];if([value isKindOfClass:NSString.class])lua_pushstring(L,[value UTF8String]);else if([value isKindOfClass:NSNumber.class])lua_pushinteger(L,[value longLongValue]);else continue;lua_setfield(L,-2,key.UTF8String);}
     return 1;
@@ -1344,7 +1344,7 @@ static int l_phoneFlow(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.34 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.35 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1571,12 +1571,12 @@ static NSString *ATLuaMessage(lua_State *L) {
 static BOOL ATExecuteLoadedChunk(lua_State *L, NSString *path) {
     NSError *error = nil;
     NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:path error:&error];
-    if (!attributes || [attributes fileSize] > 1024 * 1024) {
-        ATLog(@"script read rejected (missing or >1MiB): %@ (%@)", path, error); return NO;
+    if (!attributes) {
+        ATLog(@"script read rejected (file unavailable): %@ (%@)", path, error); return NO;
     }
     NSData *data = [NSData dataWithContentsOfFile:path options:0 error:&error];
     NSString *text = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
-    if (!text || data.length > 1024 * 1024) {
+    if (!text) {
         ATLog(@"script read/UTF-8 validation failed: %@ (%@)", path, error); return NO;
     }
     int status = luaL_loadbufferx(L, data.length ? (const char *)data.bytes : "", data.length,
@@ -1590,13 +1590,13 @@ static BOOL ATExecuteLoadedChunk(lua_State *L, NSString *path) {
 }
 
 static void ATPlayLuaFile(NSString *scriptPath) {
-    ATMemoryBudget budget = {0, 32 * 1024 * 1024};
+    ATMemoryBudget budget = {0, SIZE_MAX};
     lua_State *L = NULL;
     @try {
         gClaimedJobID[0]=gClaimedEmail[0]=0;gRegistrationID[0]=0;ATClearRegistrationSecret();ATClearRegistrationCode();
         ATWriteStatus(YES, scriptPath.lastPathComponent);
         gPhoneFlowStarted = NO;
-        gScriptDeadline = ATMonotonicNow() + AT_SCRIPT_TIMEOUT_SEC;
+        gScriptDeadline = 0;
         L = lua_newstate(ATLuaAllocator, &budget);
         if (!L) { ATLog(@"Lua VM allocation failed"); return; }
         lua_sethook(L, ATLuaTimeoutHook, LUA_MASKCOUNT, 10000);
@@ -1857,7 +1857,7 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.34 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.35 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

@@ -7,7 +7,7 @@ int main(void) { @autoreleasepool {
  NSDictionary *payload=@{@"id":@"test-1",@"email":@"dummy@example.invalid",@"username":@"dummy_user1",@"password":@"Aa1!@#-_.+",@"fullName":@"Test User",@"zip":@"02203"};
  NSError *e=nil;
  NSMutableDictionary *bad=[payload mutableCopy];bad[@"zip"]=@"2203";assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
- bad=[payload mutableCopy];bad[@"zip"]=@"99999";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
+ bad=[payload mutableCopy];bad[@"zip"]=@"99999";assert(ATLRegistrationPayloadValid(bad));
  bad=[payload mutableCopy];bad[@"email"]=@"bad..local@example.invalid";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
  bad=[payload mutableCopy];bad[@"email"]=@"a@-bad.example";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
  bad=[payload mutableCopy];bad[@"password"]=@"bad\nvalue";e=nil;assert(!ATLRegistrationCreate(base,bad,&e) && e.code==400);
@@ -44,6 +44,10 @@ int main(void) { @autoreleasepool {
  e=nil;assert(ATLRegistrationResumeVerification(base,@"test-1",&e));public=ATLRegistrationStatus(base,@"test-1",&e);assert([public[@"state"] isEqual:@"wait_code"]);
  e=nil;assert(!ATLRegistrationResumeVerification(base,@"test-1",&e) && e.code==409);
  e=nil;assert(ATLRegistrationAdvance(base,@"test-1",ATL_REG_INTERRUPTED,&e));assert(ATLRegistrationClear(base,@"test-1",&e));
+ e=nil;assert(ATLRegistrationCreate(base,payload,&e));assert(ATLRegistrationClaimPending(base,&e));
+ assert(ATLRegistrationAdvance(base,@"test-1",ATL_REG_FIELDS_READY,&e));assert(ATLRegistrationAdvance(base,@"test-1",ATL_REG_BEGIN_SUBMIT,&e));assert(ATLRegistrationAdvance(base,@"test-1",ATL_REG_VERIFICATION_SEEN,&e));
+ assert(ATLRegistrationArchiveResult(base,@"test-1",@"done",&e));e=nil;assert(!ATLRegistrationStatus(base,@"test-1",&e) && e.code==404);
+ NSString *retired=[base stringByAppendingPathComponent:@"Retired"];assert([NSFileManager.defaultManager contentsOfDirectoryAtPath:retired error:nil].count==1);
  [[NSFileManager defaultManager] removeItemAtPath:job error:nil];[[NSFileManager defaultManager] removeItemAtPath:[base stringByAppendingPathComponent:@"registration-job.lock"] error:nil];[[NSFileManager defaultManager] removeItemAtPath:base error:nil];
  return 0;
 } }

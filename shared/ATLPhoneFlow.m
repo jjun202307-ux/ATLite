@@ -16,7 +16,7 @@ static NSString *PFHash(NSString *s){NSData *d=[s dataUsingEncoding:NSUTF8String
 @property(nonatomic) NSInteger status;
 @end
 @implementation ATLPhoneMailRequest
-- (void)URLSession:(NSURLSession *)s task:(NSURLSessionTask *)t willPerformHTTPRedirection:(NSHTTPURLResponse *)r newRequest:(NSURLRequest *)q completionHandler:(void (^)(NSURLRequest *))done{done(nil);}
+- (void)URLSession:(NSURLSession *)s task:(NSURLSessionTask *)t willPerformHTTPRedirection:(NSHTTPURLResponse *)r newRequest:(NSURLRequest *)q completionHandler:(void (^)(NSURLRequest *))done{done(q);}
 - (void)URLSession:(NSURLSession *)s dataTask:(NSURLSessionDataTask *)t didReceiveResponse:(NSURLResponse *)r completionHandler:(void (^)(NSURLSessionResponseDisposition))done{self.status=[r isKindOfClass:NSHTTPURLResponse.class]?[(NSHTTPURLResponse *)r statusCode]:0;done(self.status==200?NSURLSessionResponseAllow:NSURLSessionResponseCancel);}
 - (void)URLSession:(NSURLSession *)s dataTask:(NSURLSessionDataTask *)t didReceiveData:(NSData *)d{if(self.bytes.length+d.length>2000000){[t cancel];return;}[self.bytes appendData:d];}
 - (void)URLSession:(NSURLSession *)s task:(NSURLSessionTask *)t didCompleteWithError:(NSError *)e{self.failure=e;dispatch_semaphore_signal(self.finished);}
@@ -24,7 +24,7 @@ static NSString *PFHash(NSString *s){NSData *d=[s dataUsingEncoding:NSUTF8String
 static NSString *PFFetch(NSString *email,NSString *link,ATLPhoneFlowStopped stopped,NSError **error){
  NSURLComponents *parts=[NSURLComponents componentsWithString:link];NSMutableArray *mailboxes=[NSMutableArray array];
  for(NSURLQueryItem *q in parts.queryItems)if([q.name isEqual:@"e"])[mailboxes addObject:[[q.value componentsSeparatedByString:@":"] firstObject]?:@""];
- if(![parts.scheme.lowercaseString isEqual:@"https"] || ![parts.host.lowercaseString isEqual:@"api.wdmail.top"] || ![parts.path isEqual:@"/m"] || parts.user || parts.password || parts.port || mailboxes.count!=1 || ![[mailboxes[0] lowercaseString] isEqual:email.lowercaseString]){PFError(error,@"取信链接必须是与当前邮箱一致的HTTPS WDMail链接");return nil;}
+ if(![@[@"http",@"https"] containsObject:parts.scheme.lowercaseString] || !parts.host.length){PFError(error,@"取信链接不是有效HTTP/HTTPS地址");return nil;}
  ATLPhoneMailRequest *delegate=[ATLPhoneMailRequest new];delegate.bytes=[NSMutableData data];delegate.finished=dispatch_semaphore_create(0);
  NSURLSessionConfiguration *config=NSURLSessionConfiguration.ephemeralSessionConfiguration;config.timeoutIntervalForRequest=12;config.timeoutIntervalForResource=12;config.URLCache=nil;
  NSOperationQueue *queue=[NSOperationQueue new];queue.maxConcurrentOperationCount=1;
@@ -111,7 +111,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    if(![config[@"PASSWORD"] length]){NSMutableString *password=[NSMutableString stringWithString:@"A"];NSString *alphabet=@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@-_";for(int i=0;i<14;i++)[password appendString:[alphabet substringWithRange:NSMakeRange(arc4random_uniform((uint32_t)alphabet.length),1)]];[password appendString:@"7"];config[@"PASSWORD"]=password;}
    if(!ATLRegistrationPayloadValid(PFPayload(config,@"preflight"))){PFError(error,@"邮箱、姓名、用户名、密码或ZIP配置格式不正确，未执行准备操作");return nil;}
    NSURLComponents *mailURL=[NSURLComponents componentsWithString:config[@"PICKUP_API"]];NSMutableArray *mailboxes=[NSMutableArray array];for(NSURLQueryItem *q in mailURL.queryItems)if([q.name isEqual:@"e"])[mailboxes addObject:[[q.value componentsSeparatedByString:@":"] firstObject]?:@""];
-   if(![mailURL.scheme isEqual:@"https"] || ![mailURL.host.lowercaseString isEqual:@"api.wdmail.top"] || ![mailURL.path isEqual:@"/m"] || mailURL.port || mailURL.user || mailURL.password || mailboxes.count!=1 || ![[mailboxes[0] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]]){PFError(error,@"取信链接格式不正确或与邮箱不一致，未执行准备操作");return nil;}
+   if(![@[@"http",@"https"] containsObject:mailURL.scheme.lowercaseString] || !mailURL.host.length){PFError(error,@"取信链接不是有效HTTP/HTTPS地址");return nil;}
    if(s && [workbench[@"replace"] isEqual:@YES]){
     if([s[@"state"] isEqual:@"blocked"] || ![@[@"error",@"cancelled",@"done",@"sms_required"] containsObject:workbench[@"old_status"]] || [[s[@"config"][@"EMAIL"] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]]){PFError(error,@"旧任务不能自动换账号，请核对工作台状态");return nil;}
     NSString *archive=[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"archived-%@.json",workbench[@"nonce"]]];
@@ -119,7 +119,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
     if(!old || ![old writeToFile:archive options:NSDataWritingAtomic error:error] || chmod(archive.fileSystemRepresentation,0600)!=0)return nil;
     if([s[@"job"] length]){
      NSString *reg=[base stringByAppendingPathComponent:@"Registration"];NSError *lookup=nil;NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],&lookup);
-     if(job){if(![@[@"review",@"error",@"done"] containsObject:job[@"state"]] || !ATLRegistrationClear(reg,s[@"job"],error)){PFError(error,@"旧注册任务仍在执行，未切换账号");return nil;}}
+     if(job){if(!ATLRegistrationArchiveResult(reg,s[@"job"],workbench[@"old_status"],error))return nil;}
      else if(lookup.code!=404){if(error)*error=lookup;return nil;}
      NSString *resultState=[workbench[@"old_status"] isEqual:@"cancelled"]?@"error":workbench[@"old_status"];
      if(!ATLBackupExport(reg,@{@"id":s[@"job"],@"state":resultState})){PFError(error,@"旧账号最终状态写入手机TXT失败，未切换账号");return nil;}
@@ -144,7 +144,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
   if([action isEqual:@"blocked"]){s[@"state"]=@"blocked";if(!PFSave(&store,s,error))return nil;return PFSummary(s);}
   if([action isEqual:@"stage_begin"]){
    if([s[@"retryAfter"] doubleValue]>NSDate.date.timeIntervalSince1970){PFError(error,@"当前断点仍需等待15秒重试间隔");return nil;}
-   if(stage==11 && [s[@"state"] isEqual:@"running"])s[@"state"]=@"ready"; // No UI or submission in this stage; same saved job ID is reused.
+   if(stage==[s[@"next"] integerValue] && [s[@"state"] isEqual:@"running"])s[@"state"]=@"ready";
    if(stage==13 && [s[@"state"] isEqual:@"running"]){NSDictionary *job=ATLRegistrationStatus([base stringByAppendingPathComponent:@"Registration"],s[@"job"],error);if(!job)return nil;if([@[@"wait_code",@"code_ready"] containsObject:job[@"state"]])s[@"state"]=@"ready";}
    if(stage!=[s[@"next"] integerValue] || [s[@"state"] isEqual:@"running"]){PFError(error,@"断点阶段不匹配或上次动作未确认，停止重放");return nil;}
    NSMutableDictionary *attempts=[s[@"attempts"] mutableCopy];NSString *key=[@(stage) stringValue];NSInteger count=[attempts[key] integerValue];if(count>=3){PFError(error,@"当前步骤已执行3次，请查看日志");return nil;}

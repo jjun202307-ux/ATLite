@@ -22,14 +22,12 @@ static BOOL ATLRegValidPayload(NSDictionary *p) {
  NSSet *allowed=[NSSet setWithArray:@[@"id",@"email",@"username",@"password",@"fullName",@"zip",@"pickup_api",@"country"]];
  for(NSString *key in p)if(![allowed containsObject:key])return NO;
  if(p.count==8 && (!ATLBackupField(p[@"pickup_api"],4096) || !ATLBackupField(p[@"country"],80) || !ATLBackupField(p[@"password"],254) || !ATLBackupField(p[@"email"],254) || !ATLBackupField(p[@"username"],64)))return NO;
- static NSSet *zipcodes;static dispatch_once_t once;
- dispatch_once(&once,^{zipcodes=[NSSet setWithArray:@[@"02203",@"90012",@"93309",@"93721",@"94612",@"95821",@"92101",@"95113",@"70808",@"71105",@"12207",@"11714",@"10461",@"11201",@"14202",@"11373",@"11742",@"10027",@"14604",@"10601"]];});
  return ATLRegText(p[@"id"],80,@"^[A-Za-z0-9-]+$") &&
   ATLRegEmail(p[@"email"]) &&
-  ATLRegText(p[@"username"],64,@"^[A-Za-z0-9_.-]+$") &&
+  ATLRegText(p[@"username"],64,@"^[\\x20-\\x7e]+$") &&
   ATLRegText(p[@"password"],254,@"^[\\x20-\\x7e]+$") &&
-  ATLRegText(p[@"fullName"],100,@"^[A-Za-z]+ [A-Za-z]+$") &&
-  ATLRegText(p[@"zip"],5,@"^[0-9]{5}$") && [zipcodes containsObject:p[@"zip"]];
+  ATLRegText(p[@"fullName"],100,@"^[\\x20-\\x7e]+$") &&
+  ATLRegText(p[@"zip"],5,@"^[0-9]{5}$");
 }
 BOOL ATLRegistrationPayloadValid(NSDictionary *payload){return ATLRegValidPayload(payload);}
 static NSString *ATLRegName(ATLRegState s) {
@@ -118,6 +116,27 @@ BOOL ATLRegistrationClear(NSString *directory,NSString *jobID,NSError **error){
   if(!ATLBackupExport(directory,job)){ATLRegError(error,500,@"本机结果尚未导出，保留任务供重试");return NO;}
   if(ATLRegRemove(&store)!=1){ATLRegError(error,500,@"清除结果未确认，请核对");return NO;}return YES;
  } @finally {ATLRegClose(&store);}
+}
+
+// A workbench terminal result is authoritative. A stale logical state is not
+// evidence that another script is executing; the caller already owns the run.
+BOOL ATLRegistrationArchiveResult(NSString *directory,NSString *jobID,NSString *resultState,NSError **error){
+ if(error)*error=nil;
+ if(![@[@"done",@"error",@"sms_required",@"cancelled"] containsObject:resultState]){ATLRegError(error,400,@"最终结果格式无效");return NO;}
+ ATLRegStore store;if(!ATLRegAcquire(directory,&store,error))return NO;
+ @try{
+  NSMutableDictionary *job=ATLRegLoad(&store,error);if(!job || !ATLRegMatch(job,jobID,error))return NO;
+  NSString *archiveDir=[directory stringByAppendingPathComponent:@"Retired"];
+  if(![NSFileManager.defaultManager createDirectoryAtPath:archiveDir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:error])return NO;
+  NSMutableDictionary *archived=[job mutableCopy];archived[@"workbenchResult"]=resultState;
+  NSString *path=[archiveDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%@.json",jobID,NSUUID.UUID.UUIDString]];
+  NSData *data=[NSJSONSerialization dataWithJSONObject:archived options:0 error:error];
+  if(!data || ![data writeToFile:path options:NSDataWritingAtomic error:error] || chmod(path.fileSystemRepresentation,0600)!=0){ATLRegError(error,500,@"旧登记归档文件无法保存");return NO;}
+  NSMutableDictionary *final=[job mutableCopy];final[@"state"]=[resultState isEqual:@"cancelled"]?@"error":resultState;
+  if(!ATLBackupExport(directory,final)){ATLRegError(error,500,@"最终结果无法保存到本机文件");return NO;}
+  if(ATLRegRemove(&store)!=1){ATLRegError(error,500,@"旧登记文件无法移除");return NO;}
+  return YES;
+ }@finally{ATLRegClose(&store);}
 }
 
 BOOL ATLRegistrationSetCode(NSString *directory,NSString *jobID,NSString *code,NSError **error){

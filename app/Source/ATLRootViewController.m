@@ -54,7 +54,6 @@ static NSString *ATLFilesDirectory(void) {
     NSString *path = dir.length ? [dir stringByAppendingPathComponent:self.fileName] : nil;
     NSError *error = nil;
     NSDictionary *attributes=path?[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil]:nil;
-    if(self.scriptFile && [attributes fileSize]>1024*1024){self.editor.editable=NO;self.editor.text=@"脚本超过1MiB，不能编辑或运行。";return;}
     NSString *text = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&error] : nil;
     if (text) self.editor.text = text;
     else if (error.code == NSFileReadNoSuchFileError && self.editable) self.editor.text = self.scriptFile?@"-- Lua脚本，UTF-8编码\nlog(\"我的脚本开始\")\n":@"[general]\nPROXY_RESET_URL=\n";
@@ -73,7 +72,6 @@ static NSString *ATLFilesDirectory(void) {
     NSError *error = nil;
     BOOL ok = dir && [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:&error];
     NSString *path = [dir stringByAppendingPathComponent:self.fileName];
-    if(ok && self.scriptFile && [self.editor.text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]>1024*1024)ok=NO;
     if (ok) ok = [self.editor.text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error];
     if (ok) ok = [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions:@0600} ofItemAtPath:path error:&error];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:ok ? @"已保存" : @"保存失败" message:ok ? (self.scriptFile?@"脚本已保存，返回列表即可运行。":@"配置已保存到手机。") : @"请检查文件大小与本机目录权限后重试。" preferredStyle:UIAlertControllerStyleAlert];

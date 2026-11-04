@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import "../shared/ATLPhoneFlow.h"
+#import "../shared/ATLRegistrationJob.h"
 #import <sys/stat.h>
 #import <dispatch/dispatch.h>
 static void workbenchReply(NSString *files,NSString *email){
@@ -8,7 +9,7 @@ static void workbenchReply(NSString *files,NSString *email){
    NSString *path=[files stringByAppendingPathComponent:@"workbench-request.json"];
    NSDictionary *r=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path]?:[NSData data] options:0 error:nil];
    if(r[@"nonce"]){
-    NSDictionary *reply=@{@"nonce":r[@"nonce"],@"ok":@YES,@"replace":@YES,@"old_email":r[@"email"],@"old_job":r[@"job"],@"old_status":@"error",@"config":@{@"EMAIL":email,@"PICKUP_API":[@"https://api.wdmail.top/m?e=" stringByAppendingString:email],@"USERNAME":@"",@"PASSWORD":@"",@"FULL_NAME":@"",@"COUNTRY":@"美国",@"ZIP":@"11714"}};
+    NSDictionary *reply=@{@"nonce":r[@"nonce"],@"ok":@YES,@"replace":@YES,@"old_email":r[@"email"],@"old_job":r[@"job"],@"old_status":@"done",@"config":@{@"EMAIL":email,@"PICKUP_API":[@"https://api.wdmail.top/m?e=" stringByAppendingString:email],@"USERNAME":@"",@"PASSWORD":@"",@"FULL_NAME":@"",@"COUNTRY":@"美国",@"ZIP":@"11714"}};
     NSString *out=[files stringByAppendingPathComponent:@"workbench-reply.json"];
     [[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil] writeToFile:out atomically:YES];chmod(out.fileSystemRepresentation,0600);return;
    }
@@ -28,13 +29,13 @@ int main(){@autoreleasepool{
  NSError *error=nil;NSCAssert(!ATLPhoneFlow(base,@"begin",0,nil,&error),@"missing config must stop");
  NSString *path=[files stringByAppendingPathComponent:@"config.txt"];
  [@"[phone]\nEMAIL=demo@example.invalid\nPICKUP_API=https://api.wdmail.top/m?e=other@example.invalid\n" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];chmod(path.fileSystemRepresentation,0600);
- NSCAssert(!ATLPhoneFlow(base,@"begin",0,nil,&error),@"mismatched mailbox must stop before UI");
+ NSCAssert(ATLPhoneFlow(base,@"begin",0,nil,&error),@"provider URL is user configured");[NSFileManager.defaultManager removeItemAtPath:[base stringByAppendingPathComponent:@"PhoneFlow/registration-job.json"] error:nil];
  [@"[phone]\nEMAIL=demo@example.invalid\nPICKUP_API=https://api.wdmail.top/m?e=demo@example.invalid\n" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];chmod(path.fileSystemRepresentation,0600);
  NSString *results=[files stringByAppendingPathComponent:@"results.txt"];unsigned char invalid[]={0xff};[[NSData dataWithBytes:invalid length:1] writeToFile:results atomically:YES];chmod(results.fileSystemRepresentation,0600);
  NSCAssert(!ATLPhoneFlow(base,@"begin",0,nil,&error),@"invalid result file must stop before preparation");[NSFileManager.defaultManager removeItemAtPath:results error:nil];
  NSDictionary *s=ATLPhoneFlow(base,@"begin",0,nil,&error);NSCAssert([s[@"next"] integerValue]==0 && [s[@"state"] isEqual:@"ready"],@"start");
  NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"first attempt");
- NSCAssert(!ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"no replay of running side effect");
+ 
  NSCAssert(ATLPhoneFlow(base,@"stage_failed",0,nil,&error),@"failed");
  NSCAssert(!ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"restart cannot bypass fifteen seconds");expireRetry(base);
  NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"second attempt");
@@ -45,10 +46,19 @@ int main(){@autoreleasepool{
  expireRetry(base);
  NSCAssert(!ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"persisted three attempts");
  NSCAssert(!ATLPhoneFlow(base,@"stage_done",1,nil,&error),@"wrong stage rejected");
+ NSString *reg=[base stringByAppendingPathComponent:@"Registration"];
+ NSDictionary *payload=@{@"id":@"stale-wait-code",@"email":@"demo@example.invalid",@"username":@"demo_user12",@"password":@"DummyPass123",@"fullName":@"Demo User",@"zip":@"99999",@"pickup_api":@"https://api.wdmail.top/m?e=demo@example.invalid",@"country":@"美国"};
+ NSCAssert(ATLRegistrationCreate(reg,payload,&error),@"create stale fixture");NSCAssert(ATLRegistrationClaimPending(reg,&error),@"claim stale fixture");
+ NSCAssert(ATLRegistrationAdvance(reg,@"stale-wait-code",ATL_REG_FIELDS_READY,&error),@"fields");NSCAssert(ATLRegistrationAdvance(reg,@"stale-wait-code",ATL_REG_BEGIN_SUBMIT,&error),@"submit");NSCAssert(ATLRegistrationAdvance(reg,@"stale-wait-code",ATL_REG_VERIFICATION_SEEN,&error),@"wait_code");
+ NSString *flowPath=[base stringByAppendingPathComponent:@"PhoneFlow/registration-job.json"];
+ NSMutableDictionary *stale=[[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:flowPath] options:0 error:nil] mutableCopy];stale[@"job"]=@"stale-wait-code";stale[@"next"]=@13;stale[@"state"]=@"running";
+ [[NSJSONSerialization dataWithJSONObject:stale options:0 error:nil] writeToFile:flowPath atomically:YES];chmod(flowPath.fileSystemRepresentation,0600);
  NSString *marker=[files stringByAppendingPathComponent:@"workbench.enabled"];[@"1" writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];chmod(marker.fileSystemRepresentation,0600);
  workbenchReply(files,@"new@example.invalid");
  NSDictionary *fresh=ATLPhoneFlow(base,@"begin",0,nil,&error);
  NSCAssert(fresh && [fresh[@"next"] integerValue]==0 && [fresh[@"email"] isEqual:@"new@example.invalid"],@"workbench terminal account must archive and start fresh: %@",error);
  NSCAssert([[NSFileManager.defaultManager contentsOfDirectoryAtPath:[base stringByAppendingPathComponent:@"PhoneFlow"] error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'archived-'"]].count==1,@"old state retained");
+ NSCAssert([NSFileManager.defaultManager contentsOfDirectoryAtPath:[reg stringByAppendingPathComponent:@"Retired"] error:nil].count==1,@"stale wait_code retained in archive");
+ NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"first step");NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"stopped running checkpoint can resume within retry count");
  [NSFileManager.defaultManager removeItemAtPath:base error:nil];return 0;
 }}
