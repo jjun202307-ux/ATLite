@@ -14,7 +14,7 @@ class PhoneFlowLua(unittest.TestCase):
   lua.execute((ROOT/'app/Resources/美国完整流程.at').read_text(encoding='utf-8'))
  def test_missing_configuration_does_not_touch_screen(self):
   lua=LuaRuntime(unpack_returned_tuples=True)
-  lua.execute('screenWidth=function() return 414 end;screenHeight=function() return 896 end;phoneFlow=function() error("missing config") end;tap=function() error("unexpected UI") end')
+  lua.execute('screenWidth=function() return 414 end;screenHeight=function() return 896 end;log=function() end;phoneFlow=function() error("missing config") end;tap=function() error("unexpected UI") end')
   with self.assertRaisesRegex(Exception,'missing config'):lua.execute((ROOT/'app/Resources/美国完整流程.at').read_text(encoding='utf-8'))
 
 @unittest.skipUnless(sys.platform=='darwin','requires macOS Foundation')
