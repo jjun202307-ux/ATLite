@@ -132,6 +132,11 @@ BOOL ATLRegistrationArchiveResult(NSString *directory,NSString *jobID,NSString *
   NSString *path=[archiveDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%@.json",jobID,NSUUID.UUID.UUIDString]];
   NSData *data=[NSJSONSerialization dataWithJSONObject:archived options:0 error:error];
   if(!data || ![data writeToFile:path options:NSDataWritingAtomic error:error] || chmod(path.fileSystemRepresentation,0600)!=0){ATLRegError(error,500,@"旧登记归档文件无法保存");return NO;}
+  int archivedFD=open(path.fileSystemRepresentation,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+  BOOL durable=archivedFD>=0 && fsync(archivedFD)==0;if(archivedFD>=0)close(archivedFD);
+  int archivedDirFD=open(archiveDir.fileSystemRepresentation,O_RDONLY|O_CLOEXEC|O_DIRECTORY);
+  durable=durable && archivedDirFD>=0 && fsync(archivedDirFD)==0;if(archivedDirFD>=0)close(archivedDirFD);
+  if(!durable){ATLRegError(error,500,@"旧登记归档文件无法落盘");return NO;}
   NSMutableDictionary *final=[job mutableCopy];final[@"state"]=[resultState isEqual:@"cancelled"]?@"error":resultState;
   if(!ATLBackupExport(directory,final)){ATLRegError(error,500,@"最终结果无法保存到本机文件");return NO;}
   if(ATLRegRemove(&store)!=1){ATLRegError(error,500,@"旧登记文件无法移除");return NO;}
