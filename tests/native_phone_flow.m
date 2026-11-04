@@ -61,5 +61,9 @@ int main(){@autoreleasepool{
  NSCAssert([[NSFileManager.defaultManager contentsOfDirectoryAtPath:[base stringByAppendingPathComponent:@"PhoneFlow"] error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'archived-'"]].count==1,@"old state retained");
  NSCAssert([NSFileManager.defaultManager contentsOfDirectoryAtPath:[reg stringByAppendingPathComponent:@"Retired"] error:nil].count==1,@"stale wait_code retained in archive");
  NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"first step");NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"stopped running checkpoint can resume within retry count");
+ [NSFileManager.defaultManager removeItemAtPath:marker error:nil];
+ [@"[phone]\nEMAIL=local@example.invalid\nPICKUP_API=http://mail.example.invalid/custom-token\n" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];chmod(path.fileSystemRepresentation,0600);
+ NSDictionary *local=ATLPhoneFlow(base,@"begin",0,nil,&error);
+ NSCAssert(local && [local[@"email"] isEqual:@"local@example.invalid"] && [local[@"next"] integerValue]==0,@"explicit local account change has no stale-state/provider lock: %@",error);
  [NSFileManager.defaultManager removeItemAtPath:base error:nil];return 0;
 }}

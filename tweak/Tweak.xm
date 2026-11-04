@@ -1497,7 +1497,6 @@ static void ATEnsureLuaLibraries(void) {
 // 打不开任何新程序。这里用 Lua 的 count hook 每 10 万条指令检查一次挂钟时间，
 // 超时即中止脚本（不中止 SpringBoard）。
 // ---------------------------------------------------------------------------
-#define AT_SCRIPT_TIMEOUT_SEC 60
 #define AT_SCRIPT_HOOK_COUNT  100000
 // gScriptDeadline is defined beside ATMonotonicNow, before all C operations.
 

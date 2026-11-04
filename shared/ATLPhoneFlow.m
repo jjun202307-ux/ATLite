@@ -127,8 +127,12 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
     if(ATLRegRemove(&store)!=1){PFError(error,@"旧断点归档未确认，未启动新账号");return nil;}s=nil;
    }
    if(s && ![s[@"config"][@"EMAIL"] isEqual:config[@"EMAIL"]]){
-    if(![@[@"done",@"sms_required"] containsObject:s[@"state"]]){PFError(error,@"旧邮箱任务尚未结束，不能换账号覆盖断点");return nil;}
-    if([s[@"state"] isEqual:@"done"]){NSString *reg=[base stringByAppendingPathComponent:@"Registration"];NSError *readError=nil;NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],&readError);if(job){if(![job[@"state"] isEqual:@"done"] || !ATLRegistrationClear(reg,s[@"job"],error))return nil;}else if(readError.code!=404){if(error)*error=readError;return nil;}}
+    if([s[@"state"] isEqual:@"blocked"]){PFError(error,@"服务端已阻止此会话，已按要求停止");return nil;}
+    NSString *path=[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"archived-local-%@.json",NSUUID.UUID.UUIDString]];
+    NSData *old=[NSJSONSerialization dataWithJSONObject:s options:0 error:error];
+    if(!old || ![old writeToFile:path options:NSDataWritingAtomic error:error] || chmod(path.fileSystemRepresentation,0600)!=0)return nil;
+    if([s[@"job"] length]){NSString *reg=[base stringByAppendingPathComponent:@"Registration"];NSError *readError=nil;NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],&readError);if(job){if(!ATLRegistrationArchiveResult(reg,s[@"job"],@"cancelled",error))return nil;}else if(readError.code!=404){if(error)*error=readError;return nil;}}
+    if(ATLRegRemove(&store)!=1){PFError(error,@"旧断点文件无法移除");return nil;}
     s=nil;
    }
    if(!s){

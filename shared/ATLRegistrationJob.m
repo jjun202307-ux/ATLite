@@ -137,7 +137,7 @@ BOOL ATLRegistrationArchiveResult(NSString *directory,NSString *jobID,NSString *
   int archivedDirFD=open(archiveDir.fileSystemRepresentation,O_RDONLY|O_CLOEXEC|O_DIRECTORY);
   durable=durable && archivedDirFD>=0 && fsync(archivedDirFD)==0;if(archivedDirFD>=0)close(archivedDirFD);
   if(!durable){ATLRegError(error,500,@"旧登记归档文件无法落盘");return NO;}
-  NSMutableDictionary *final=[job mutableCopy];final[@"state"]=[resultState isEqual:@"cancelled"]?@"error":resultState;
+  NSMutableDictionary *final=[job mutableCopy];final[@"state"]=resultState;
   if(!ATLBackupExport(directory,final)){ATLRegError(error,500,@"最终结果无法保存到本机文件");return NO;}
   if(ATLRegRemove(&store)!=1){ATLRegError(error,500,@"旧登记文件无法移除");return NO;}
   return YES;
