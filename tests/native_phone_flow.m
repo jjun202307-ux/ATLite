@@ -61,6 +61,21 @@ int main(){@autoreleasepool{
  NSCAssert([[NSFileManager.defaultManager contentsOfDirectoryAtPath:[base stringByAppendingPathComponent:@"PhoneFlow"] error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'archived-'"]].count==1,@"old state retained");
  NSCAssert([NSFileManager.defaultManager contentsOfDirectoryAtPath:[reg stringByAppendingPathComponent:@"Retired"] error:nil].count==1,@"stale wait_code retained in archive");
  NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"first step");NSCAssert(ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"stopped running checkpoint can resume within retry count");
+ // 场景A（2026-11-05 规则）：无断点 + 残留注册任务 → 按失败归档后开始新账号，不再拒绝
+ [NSFileManager.defaultManager removeItemAtPath:flowPath error:nil];
+ NSMutableDictionary *payload2=[payload mutableCopy];payload2[@"id"]=@"stale-pending-2";
+ NSCAssert(ATLRegistrationCreate(reg,payload2,&error),@"create second stale fixture");
+ workbenchReply(files,@"second@example.invalid");
+ NSDictionary *second=ATLPhoneFlow(base,@"begin",0,nil,&error);
+ NSCAssert(second && [second[@"email"] isEqual:@"second@example.invalid"] && [second[@"next"] integerValue]==0,@"orphaned registration job must be archived as failed and the new account must start: %@",error);
+ NSCAssert(![NSFileManager.defaultManager fileExistsAtPath:[reg stringByAppendingPathComponent:@"registration-job.json"]],@"stale registration job cleared");
+ NSCAssert([NSFileManager.defaultManager contentsOfDirectoryAtPath:[reg stringByAppendingPathComponent:@"Retired"] error:nil].count==2,@"stale pending job archived");
+ // 场景B：断点内容损坏（权限正确）→ rename 旁路归档后开始新账号，原文件保留可查
+ unsigned char junk[]={0xff,0xfe};[[NSData dataWithBytes:junk length:2] writeToFile:flowPath atomically:YES];chmod(flowPath.fileSystemRepresentation,0600);
+ workbenchReply(files,@"third@example.invalid");
+ NSDictionary *third=ATLPhoneFlow(base,@"begin",0,nil,&error);
+ NSCAssert(third && [third[@"email"] isEqual:@"third@example.invalid"] && [third[@"state"] isEqual:@"ready"],@"corrupt checkpoint must be bypassed and archived: %@",error);
+ NSCAssert([[NSFileManager.defaultManager contentsOfDirectoryAtPath:[base stringByAppendingPathComponent:@"PhoneFlow"] error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'archived-corrupt-'"]].count==1,@"corrupt checkpoint preserved as archive");
  [NSFileManager.defaultManager removeItemAtPath:marker error:nil];
  [@"[phone]\nEMAIL=local@example.invalid\nPICKUP_API=http://mail.example.invalid/custom-token\n" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];chmod(path.fileSystemRepresentation,0600);
  NSDictionary *local=ATLPhoneFlow(base,@"begin",0,nil,&error);

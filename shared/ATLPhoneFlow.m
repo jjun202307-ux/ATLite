@@ -68,6 +68,23 @@ static NSMutableDictionary *PFConfig(NSString *base,NSError **error){
 static BOOL PFSave(ATLRegStore *store,NSDictionary *state,NSError **error){if(!ATLBackupSave(store,state)){PFError(error,@"手机断点保存失败，停止后续动作");return NO;}return YES;}
 static NSDictionary *PFSummary(NSDictionary *s){return @{@"next":s[@"next"]?:@0,@"state":s[@"state"]?:@"ready",@"email":s[@"config"][@"EMAIL"]?:@"",@"job":s[@"job"]?:@"",@"retry_ms":@((NSInteger)ceil(MAX(0,[s[@"retryAfter"] doubleValue]-NSDate.date.timeIntervalSince1970)*1000))};}
 static NSDictionary *PFPayload(NSDictionary *c,NSString *identifier){return @{@"id":identifier,@"email":c[@"EMAIL"]?:@"",@"username":c[@"USERNAME"]?:@"",@"fullName":c[@"FULL_NAME"]?:@"",@"password":c[@"PASSWORD"]?:@"",@"zip":[c[@"ZIP"] length]?c[@"ZIP"]:@"11714",@"pickup_api":c[@"PICKUP_API"]?:@"",@"country":[c[@"COUNTRY"] length]?c[@"COUNTRY"]:@"美国"};}
+// 残留注册任务按失败归档（2026-11-05 规则：停止重启=上个账号标失败，不允许以"请先核对"拒绝开始）。
+// 任务文件可读则走状态机归档（写 results.txt 标记"失败"）；不可读则旁路移动到 Retired/。永不删数据。
+static BOOL PFArchiveStaleRegistration(NSString *reg,NSError **error){
+ NSString *path=[reg stringByAppendingPathComponent:@"registration-job.json"];
+ struct stat st;if(lstat(path.fileSystemRepresentation,&st)!=0){if(errno==ENOENT)return YES;PFError(error,@"注册任务目录不可读取，未执行新的准备操作");return NO;}
+ NSData *data=[NSData dataWithContentsOfFile:path];id job=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+ NSString *jobID=[job isKindOfClass:NSDictionary.class]?job[@"id"]:nil;
+ if(jobID && ATLRegistrationArchiveResult(reg,jobID,@"error",error)){
+  struct stat gone;if(lstat(path.fileSystemRepresentation,&gone)!=0 && errno==ENOENT)return YES;
+ }
+ if(error)*error=nil;
+ NSString *retired=[reg stringByAppendingPathComponent:@"Retired"];
+ if(![NSFileManager.defaultManager createDirectoryAtPath:retired withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:error])return NO;
+ NSString *target=[retired stringByAppendingPathComponent:[NSString stringWithFormat:@"orphaned-%@.json",NSUUID.UUID.UUIDString]];
+ if(![NSFileManager.defaultManager moveItemAtPath:path toPath:target error:error]){PFError(error,@"旧注册任务无法归档，未执行新的准备操作");return NO;}
+ chmod(target.fileSystemRepresentation,0600);return YES;
+}
 
 static NSDictionary *PFWorkbench(NSString *base,NSDictionary *state,ATLPhoneFlowStopped stopped,NSError **error){
  NSString *files=[base stringByAppendingPathComponent:@"Local/Files"],*nonce=NSUUID.UUID.UUIDString;
@@ -96,7 +113,8 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
  ATLRegStore store;if(!ATLRegOpen(&store,directory.fileSystemRepresentation)){PFError(error,@"手机流程状态正在使用或权限不正确");return nil;}
  @try{
   NSMutableDictionary *s=[ATLBackupRead(&store) mutableCopy];
-  struct stat existing;if(!s && fstatat(store.dirfd,"registration-job.json",&existing,AT_SYMLINK_NOFOLLOW)==0){PFError(error,@"本机断点损坏，保留现场，不重新开始");return nil;}
+  BOOL staleUnreadable=NO;
+  struct stat existing;if(!s && fstatat(store.dirfd,"registration-job.json",&existing,AT_SYMLINK_NOFOLLOW)==0)staleUnreadable=YES;
   if([action isEqual:@"begin"]){
    NSMutableDictionary *config=nil;NSDictionary *workbench=nil;
    if([NSFileManager.defaultManager fileExistsAtPath:[base stringByAppendingPathComponent:@"Local/Files/workbench.enabled"]]){
@@ -135,8 +153,14 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
     if(ATLRegRemove(&store)!=1){PFError(error,@"旧断点文件无法移除");return nil;}
     s=nil;
    }
+   // 断点不可读（权限或内容损坏）：按中断处理，rename 旁路归档原文件后照常开始；数据保留在 archived-corrupt-*。
+   if(!s && staleUnreadable){
+    NSString *corrupt=[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"archived-corrupt-%@.json",NSUUID.UUID.UUIDString]];
+    if(renameat(store.dirfd,"registration-job.json",store.dirfd,corrupt.lastPathComponent.UTF8String)!=0 && errno!=ENOENT){PFError(error,@"旧断点无法归档，未开始新账号");return nil;}
+    chmod(corrupt.fileSystemRepresentation,0600);staleUnreadable=NO;
+   }
    if(!s){
-    struct stat oldJob;NSString *oldPath=[base stringByAppendingPathComponent:@"Registration/registration-job.json"];if(lstat(oldPath.fileSystemRepresentation,&oldJob)==0 || errno!=ENOENT){PFError(error,@"手机仍有已有注册任务，请先核对，不执行新的准备操作");return nil;}
+    if(!PFArchiveStaleRegistration([base stringByAppendingPathComponent:@"Registration"],error))return nil;
     NSString *results=PFReadText([base stringByAppendingPathComponent:@"Local/Files/results.txt"],16*1024*1024,YES,error);if(!results)return nil;
     for(NSString *line in [results componentsSeparatedByString:@"\n"]){NSArray *f=[line componentsSeparatedByString:@"----"];if(f.count==7 && [[f[1] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]] && [@[@"完成",@"已完成",@"需要接短信码"] containsObject:f[5]]){PFError(error,@"该邮箱已有完成结果，不会再次注册");return nil;}}
     s=[@{@"config":config,@"next":@0,@"state":@"ready",@"attempts":@{}} mutableCopy];if(!PFSave(&store,s,error))return nil;
