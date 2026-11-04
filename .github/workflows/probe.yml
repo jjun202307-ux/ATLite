@@ -1,0 +1,15 @@
+name: Runner probe
+on:
+  push:
+    paths:
+      - '.github/workflows/probe.yml'
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-15
+    steps:
+      - name: Check runner health
+        run: |
+          echo "probe ok"
+          sw_vers
+          uname -m
