@@ -18,7 +18,7 @@ class EnergyModeTests(unittest.TestCase):
 
     def test_legacy_capture_path_and_cleanup_are_explicit(self):
         source = (ROOT / 'tweak/Tweak.xm').read_text(encoding='utf-8')
-        self.assertIn('if (!gEnergyEnabled || !gEnergyDepth) return ATCaptureScreen(out);', source)
+        self.assertRegex(source, r'if \(!gEnergyEnabled \|\| !gEnergyDepth\) \{\s*if \(gEnergyEnabled\) gEnergyCaptures\+\+;\s*return ATCaptureScreen\(out\);')
         self.assertIn('if (!gEnergyDepth) ATEnergyInvalidate();', source)
         for name in ['ATSimulateTouch', 'ATSimulateKey', 'ATASCIIKeyEvent', 'l_usleep', 'l_msleep']:
             prefix = 'void ' if name.startswith('ATSimulate') else ('BOOL ' if name=='ATASCIIKeyEvent' else 'int ')

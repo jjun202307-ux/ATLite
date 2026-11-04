@@ -656,7 +656,6 @@ static IOSurfaceRef ATCaptureSurfaceWithTimeout(void) {
 
 // 抓主屏 → RGBA8（仅 SpringBoard 进程可用）
 static BOOL ATCaptureScreen(ATBitmap *out) {
-    if (gEnergyEnabled) gEnergyCaptures++;
     if (!gCaptureReady) return NO;
     IOSurfaceRef s = ATCaptureSurfaceWithTimeout();
     if (!s) return NO;
@@ -708,8 +707,12 @@ static inline uint8_t ATLuma(const uint8_t *px) {
 #pragma mark - Image matching (粗到细 NCC)
 
 static BOOL ATCaptureForRead(ATBitmap *out) {
-    if (!gEnergyEnabled || !gEnergyDepth) return ATCaptureScreen(out);
+    if (!gEnergyEnabled || !gEnergyDepth) {
+        if (gEnergyEnabled) gEnergyCaptures++;
+        return ATCaptureScreen(out);
+    }
     if (!gEnergyFrame.rgba) {
+        gEnergyCaptures++;
         if (!ATCaptureScreen(&gEnergyFrame)) return NO;
     } else gEnergyFrameHits++;
     *out=gEnergyFrame;out->borrowed=YES;

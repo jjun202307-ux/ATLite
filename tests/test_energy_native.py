@@ -27,7 +27,7 @@ typedef struct { uint8_t *rgba; int w,h; BOOL borrowed; } ATBitmap;
 static BOOL gEnergyEnabled=YES,gEnergyOCRValid=NO;
 static unsigned gEnergyDepth=0;
 static ATBitmap gEnergyFrame={0};
-static unsigned long gEnergyFrameHits=0;
+static unsigned long gEnergyFrameHits=0,gEnergyCaptures=0;
 static int captures=0,stopped=0;
 static BOOL ATCaptureScreen(ATBitmap *out) {
     captures++;out->rgba=malloc(4);out->w=out->h=1;out->borrowed=NO;return YES;
