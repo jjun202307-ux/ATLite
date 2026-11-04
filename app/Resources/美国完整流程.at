@@ -1,4 +1,4 @@
--- 纯手机入口：无需电脑、USB或SSH。由generate_phone_flow.py生成。
+-- 手机完整入口：工作台模式在开始时读取电脑账号，界面动作由手机自动执行。
 local parts={}
 parts['US_准备_AMG_定位']=function()
 -- 仅识别 AMG 菜单；不触发“原始机器”或“一键新机”。
@@ -1243,7 +1243,7 @@ end
 local function amg()
  AMG_BUSY_SEEN=false
  openApp('AMG','amg');run('US_准备_AMG执行_开发中')
- for i=1,3 do
+ while true do
   local result=run('US_准备_AMG监测_开发中')
   if has(result,'AMG_ERROR') or has(result,'AMG_UNCERTAIN') then error('AMG_RESULT_UNKNOWN_STOP') end
   if has(result,'AMG_LEFT_TO_HOME') then error('AMG_EXITED') end
@@ -1296,15 +1296,16 @@ local function waitCode()
  error('MAIL_WAIT_TIMEOUT_STOP')
 end
 if screenWidth()~=414 or screenHeight()~=896 then error('PHONE_SIZE_MISMATCH') end
-log('正在读取启动账号和最新状态；工作台模式请保持电脑管理器在线')
+log('开始：读取工作台账号和状态')
 local state=phoneFlow('begin')
-log('启动账号已确认，从保存的正确阶段继续')
+log('账号已就绪，下一阶段序号：'..state.next)
 if state.state=='blocked' then error('SERVER_BLOCKED_STOP') end
 if state.state=='sms_pending' then phoneFlow('sms');log('已补写短信验证结果，本轮完成');return end
 if state.state=='done' or state.state=='sms_required' then log('该账号已经完成，不会重复注册');return end
 if state.job~='' and state.next>11 then
  local job=phoneFlow('job_status')
  if job.state=='done' then phoneFlow('finish');log('已恢复完成记录');return end
+ openApp('Vinted','vinted')
  if job.state=='review' then
   local page=run('observe')
   if not has(page,'PAGE_EMAIL_CODE') then error('REVIEW_REQUIRED_NO_RESUBMIT') end
@@ -1320,8 +1321,8 @@ local stages={
  {'安装Vinted',function()
   if installed() then return end
   openApp('App Store','appstore');run('US_准备_AppStore安装')
-  for i=1,40 do local h=findText('OPEN');if h and #h>0 then return end;msleep(4000) end
-  error('INSTALL_TIMEOUT')
+  log('等待App Store完成安装，可随时停止')
+  while true do local h=findText('OPEN');if h and #h>0 then return end;msleep(4000) end
  end},
  {'第二次AMG',amg},
  {'第二次Safari清理',safari},
@@ -1342,7 +1343,7 @@ for index=state.next+1,#stages do
   local message=tostring(problem)
   if has(message,'SERVER_BLOCKED_STOP') then phoneFlow('blocked');error(message) end
   if has(message,'SMS_REQUIRED') then phoneFlow('sms');log('需要接短信码，本轮完成并已保存');return end
-  if index>=13 or has(message,'_STOP') or has(message,'_PAUSE') then error(message) end
+  if index>=13 then error(message) end
   phoneFlow('stage_failed',index-1)
   if attempt>=3 then error(message) end
   log('当前步骤15秒后重试：'..item[1]);msleep(15000)
