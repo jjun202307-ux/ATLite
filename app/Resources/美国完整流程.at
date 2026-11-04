@@ -1296,7 +1296,9 @@ local function waitCode()
  error('MAIL_WAIT_TIMEOUT_STOP')
 end
 if screenWidth()~=414 or screenHeight()~=896 then error('PHONE_SIZE_MISMATCH') end
+log('正在读取启动账号和最新状态；工作台模式请保持电脑管理器在线')
 local state=phoneFlow('begin')
+log('启动账号已确认，从保存的正确阶段继续')
 if state.state=='blocked' then error('SERVER_BLOCKED_STOP') end
 if state.state=='sms_pending' then phoneFlow('sms');log('已补写短信验证结果，本轮完成');return end
 if state.state=='done' or state.state=='sms_required' then log('该账号已经完成，不会重复注册');return end

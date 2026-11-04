@@ -1,6 +1,21 @@
 #import <Foundation/Foundation.h>
 #import "../shared/ATLPhoneFlow.h"
 #import <sys/stat.h>
+#import <dispatch/dispatch.h>
+static void workbenchReply(NSString *files,NSString *email){
+ dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT,0),^{
+  for(int i=0;i<100;i++){
+   NSString *path=[files stringByAppendingPathComponent:@"workbench-request.json"];
+   NSDictionary *r=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path]?:[NSData data] options:0 error:nil];
+   if(r[@"nonce"]){
+    NSDictionary *reply=@{@"nonce":r[@"nonce"],@"ok":@YES,@"replace":@YES,@"old_email":r[@"email"],@"old_job":r[@"job"],@"old_status":@"error",@"config":@{@"EMAIL":email,@"PICKUP_API":[@"https://api.wdmail.top/m?e=" stringByAppendingString:email],@"USERNAME":@"",@"PASSWORD":@"",@"FULL_NAME":@"",@"COUNTRY":@"美国",@"ZIP":@"11714"}};
+    NSString *out=[files stringByAppendingPathComponent:@"workbench-reply.json"];
+    [[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil] writeToFile:out atomically:YES];chmod(out.fileSystemRepresentation,0600);return;
+   }
+   [NSThread sleepForTimeInterval:0.05];
+  }
+ });
+}
 static void expireRetry(NSString *base){NSString *path=[base stringByAppendingPathComponent:@"PhoneFlow/registration-job.json"];NSMutableDictionary *s=[[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path] options:0 error:nil] mutableCopy];s[@"retryAfter"]=@0;[[NSJSONSerialization dataWithJSONObject:s options:0 error:nil] writeToFile:path atomically:YES];chmod(path.fileSystemRepresentation,0600);}
 int main(){@autoreleasepool{
  NSCAssert([ATLPhoneMailCode(@"Your verification code is 012345") isEqual:@"012345"],@"leading zero");
@@ -30,5 +45,10 @@ int main(){@autoreleasepool{
  expireRetry(base);
  NSCAssert(!ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"persisted three attempts");
  NSCAssert(!ATLPhoneFlow(base,@"stage_done",1,nil,&error),@"wrong stage rejected");
+ NSString *marker=[files stringByAppendingPathComponent:@"workbench.enabled"];[@"1" writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];chmod(marker.fileSystemRepresentation,0600);
+ workbenchReply(files,@"new@example.invalid");
+ NSDictionary *fresh=ATLPhoneFlow(base,@"begin",0,nil,&error);
+ NSCAssert(fresh && [fresh[@"next"] integerValue]==0 && [fresh[@"email"] isEqual:@"new@example.invalid"],@"workbench terminal account must archive and start fresh: %@",error);
+ NSCAssert([[NSFileManager.defaultManager contentsOfDirectoryAtPath:[base stringByAppendingPathComponent:@"PhoneFlow"] error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'archived-'"]].count==1,@"old state retained");
  [NSFileManager.defaultManager removeItemAtPath:base error:nil];return 0;
 }}

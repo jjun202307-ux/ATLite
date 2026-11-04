@@ -69,6 +69,27 @@ static BOOL PFSave(ATLRegStore *store,NSDictionary *state,NSError **error){if(!A
 static NSDictionary *PFSummary(NSDictionary *s){return @{@"next":s[@"next"]?:@0,@"state":s[@"state"]?:@"ready",@"email":s[@"config"][@"EMAIL"]?:@"",@"job":s[@"job"]?:@"",@"retry_ms":@((NSInteger)ceil(MAX(0,[s[@"retryAfter"] doubleValue]-NSDate.date.timeIntervalSince1970)*1000))};}
 static NSDictionary *PFPayload(NSDictionary *c,NSString *identifier){return @{@"id":identifier,@"email":c[@"EMAIL"]?:@"",@"username":c[@"USERNAME"]?:@"",@"fullName":c[@"FULL_NAME"]?:@"",@"password":c[@"PASSWORD"]?:@"",@"zip":[c[@"ZIP"] length]?c[@"ZIP"]:@"11714",@"pickup_api":c[@"PICKUP_API"]?:@"",@"country":[c[@"COUNTRY"] length]?c[@"COUNTRY"]:@"美国"};}
 
+static NSDictionary *PFWorkbench(NSString *base,NSDictionary *state,ATLPhoneFlowStopped stopped,NSError **error){
+ NSString *files=[base stringByAppendingPathComponent:@"Local/Files"],*nonce=NSUUID.UUID.UUIDString;
+ NSDictionary *request=@{@"nonce":nonce,@"at":@(NSDate.date.timeIntervalSince1970),@"email":state[@"config"][@"EMAIL"]?:@"",@"job":state[@"job"]?:@""};
+ NSString *path=[files stringByAppendingPathComponent:@"workbench-request.json"];
+ NSData *data=[NSJSONSerialization dataWithJSONObject:request options:0 error:error];
+ if(!data || ![data writeToFile:path options:NSDataWritingAtomic error:error] || chmod(path.fileSystemRepresentation,0600)!=0){PFError(error,@"工作台启动请求保存失败");return nil;}
+ NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:20];
+ while(deadline.timeIntervalSinceNow>0){
+  if(stopped && stopped()){PFError(error,@"启动同步已停止");return nil;}
+  NSString *text=PFReadText([files stringByAppendingPathComponent:@"workbench-reply.json"],16384,YES,error);if(!text)return nil;
+  NSDictionary *reply=text.length?[NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]:nil;
+  if([reply isKindOfClass:NSDictionary.class] && [reply[@"nonce"] isEqual:nonce]){
+   if(![reply[@"ok"] isEqual:@YES]){PFError(error,[reply[@"message"] isKindOfClass:NSString.class]?reply[@"message"]:@"工作台未分配账号");return nil;}
+   if(![reply[@"old_email"] isEqual:request[@"email"]] || ![reply[@"old_job"] isEqual:request[@"job"]] || ![reply[@"config"] isKindOfClass:NSDictionary.class]){PFError(error,@"工作台响应与当前任务不一致");return nil;}
+   return reply;
+  }
+  [NSThread sleepForTimeInterval:0.2];
+ }
+ PFError(error,@"工作台启动同步超时，请保持电脑管理器运行、手机与电脑在同一局域网；未使用旧账号");return nil;
+}
+
 NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPhoneFlowStopped stopped,NSError **error){
  if(error)*error=nil;NSString *directory=[base stringByAppendingPathComponent:@"PhoneFlow"];
  if(![NSFileManager.defaultManager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:error])return nil;
@@ -77,7 +98,13 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
   NSMutableDictionary *s=[ATLBackupRead(&store) mutableCopy];
   struct stat existing;if(!s && fstatat(store.dirfd,"registration-job.json",&existing,AT_SYMLINK_NOFOLLOW)==0){PFError(error,@"本机断点损坏，保留现场，不重新开始");return nil;}
   if([action isEqual:@"begin"]){
-   NSMutableDictionary *config=PFConfig(base,error);if(!config)return nil;
+   NSMutableDictionary *config=nil;NSDictionary *workbench=nil;
+   if([NSFileManager.defaultManager fileExistsAtPath:[base stringByAppendingPathComponent:@"Local/Files/workbench.enabled"]]){
+    workbench=PFWorkbench(base,s,stopped,error);if(!workbench)return nil;
+    config=[workbench[@"config"] mutableCopy];
+    for(NSString *key in @[@"EMAIL",@"PICKUP_API",@"USERNAME",@"FULL_NAME",@"PASSWORD",@"COUNTRY",@"ZIP"]){id v=config[key];if(![v isKindOfClass:NSString.class] || [v length]>4096 || [v rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound){PFError(error,@"工作台账号字段格式无效");return nil;}}
+   }else config=PFConfig(base,error);
+   if(!config)return nil;
    NSString *first=PFFIRST()[arc4random_uniform(200)],*last=PFLAST()[arc4random_uniform(200)];
    if(![config[@"USERNAME"] length]){unsigned length=2+arc4random_uniform(3);unsigned lo=length==2?10:(length==3?100:1000);config[@"USERNAME"]=[NSString stringWithFormat:@"%@_%@%u",first.lowercaseString,last.lowercaseString,lo+arc4random_uniform(9*lo)];}
    if(![config[@"FULL_NAME"] length])config[@"FULL_NAME"]=[NSString stringWithFormat:@"%@ %@",first,last];
@@ -85,6 +112,20 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    if(!ATLRegistrationPayloadValid(PFPayload(config,@"preflight"))){PFError(error,@"邮箱、姓名、用户名、密码或ZIP配置格式不正确，未执行准备操作");return nil;}
    NSURLComponents *mailURL=[NSURLComponents componentsWithString:config[@"PICKUP_API"]];NSMutableArray *mailboxes=[NSMutableArray array];for(NSURLQueryItem *q in mailURL.queryItems)if([q.name isEqual:@"e"])[mailboxes addObject:[[q.value componentsSeparatedByString:@":"] firstObject]?:@""];
    if(![mailURL.scheme isEqual:@"https"] || ![mailURL.host.lowercaseString isEqual:@"api.wdmail.top"] || ![mailURL.path isEqual:@"/m"] || mailURL.port || mailURL.user || mailURL.password || mailboxes.count!=1 || ![[mailboxes[0] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]]){PFError(error,@"取信链接格式不正确或与邮箱不一致，未执行准备操作");return nil;}
+   if(s && [workbench[@"replace"] isEqual:@YES]){
+    if([s[@"state"] isEqual:@"blocked"] || ![@[@"error",@"cancelled",@"done",@"sms_required"] containsObject:workbench[@"old_status"]] || [[s[@"config"][@"EMAIL"] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]]){PFError(error,@"旧任务不能自动换账号，请核对工作台状态");return nil;}
+    NSString *archive=[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"archived-%@.json",workbench[@"nonce"]]];
+    NSData *old=[NSJSONSerialization dataWithJSONObject:s options:0 error:error];
+    if(!old || ![old writeToFile:archive options:NSDataWritingAtomic error:error] || chmod(archive.fileSystemRepresentation,0600)!=0)return nil;
+    if([s[@"job"] length]){
+     NSString *reg=[base stringByAppendingPathComponent:@"Registration"];NSError *lookup=nil;NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],&lookup);
+     if(job){if(![@[@"review",@"error",@"done"] containsObject:job[@"state"]] || !ATLRegistrationClear(reg,s[@"job"],error)){PFError(error,@"旧注册任务仍在执行，未切换账号");return nil;}}
+     else if(lookup.code!=404){if(error)*error=lookup;return nil;}
+     NSString *resultState=[workbench[@"old_status"] isEqual:@"cancelled"]?@"error":workbench[@"old_status"];
+     if(!ATLBackupExport(reg,@{@"id":s[@"job"],@"state":resultState})){PFError(error,@"旧账号最终状态写入手机TXT失败，未切换账号");return nil;}
+    }
+    if(ATLRegRemove(&store)!=1){PFError(error,@"旧断点归档未确认，未启动新账号");return nil;}s=nil;
+   }
    if(s && ![s[@"config"][@"EMAIL"] isEqual:config[@"EMAIL"]]){
     if(![@[@"done",@"sms_required"] containsObject:s[@"state"]]){PFError(error,@"旧邮箱任务尚未结束，不能换账号覆盖断点");return nil;}
     if([s[@"state"] isEqual:@"done"]){NSString *reg=[base stringByAppendingPathComponent:@"Registration"];NSError *readError=nil;NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],&readError);if(job){if(![job[@"state"] isEqual:@"done"] || !ATLRegistrationClear(reg,s[@"job"],error))return nil;}else if(readError.code!=404){if(error)*error=readError;return nil;}}
