@@ -53,7 +53,6 @@ static NSString *ATLFilesDirectory(void) {
     NSString *dir = self.scriptFile?ATLScriptsDir():ATLFilesDirectory();
     NSString *path = dir.length ? [dir stringByAppendingPathComponent:self.fileName] : nil;
     NSError *error = nil;
-    NSDictionary *attributes=path?[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil]:nil;
     NSString *text = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&error] : nil;
     if (text) self.editor.text = text;
     else if (error.code == NSFileReadNoSuchFileError && self.editable) self.editor.text = self.scriptFile?@"-- Lua脚本，UTF-8编码\nlog(\"我的脚本开始\")\n":@"[general]\nPROXY_RESET_URL=\n";
