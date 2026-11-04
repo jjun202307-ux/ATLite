@@ -47,6 +47,7 @@ int main(){@autoreleasepool{
  NSCAssert(!ATLPhoneFlow(base,@"stage_begin",0,nil,&error),@"persisted three attempts");
  NSCAssert(!ATLPhoneFlow(base,@"stage_done",1,nil,&error),@"wrong stage rejected");
  NSString *reg=[base stringByAppendingPathComponent:@"Registration"];
+ [NSFileManager.defaultManager createDirectoryAtPath:reg withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil];
  NSDictionary *payload=@{@"id":@"stale-wait-code",@"email":@"demo@example.invalid",@"username":@"demo_user12",@"password":@"DummyPass123",@"fullName":@"Demo User",@"zip":@"99999",@"pickup_api":@"https://api.wdmail.top/m?e=demo@example.invalid",@"country":@"美国"};
  NSCAssert(ATLRegistrationCreate(reg,payload,&error),@"create stale fixture");NSCAssert(ATLRegistrationClaimPending(reg,&error),@"claim stale fixture");
  NSCAssert(ATLRegistrationAdvance(reg,@"stale-wait-code",ATL_REG_FIELDS_READY,&error),@"fields");NSCAssert(ATLRegistrationAdvance(reg,@"stale-wait-code",ATL_REG_BEGIN_SUBMIT,&error),@"submit");NSCAssert(ATLRegistrationAdvance(reg,@"stale-wait-code",ATL_REG_VERIFICATION_SEEN,&error),@"wait_code");
