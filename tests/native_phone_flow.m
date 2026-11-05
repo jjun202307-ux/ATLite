@@ -3,6 +3,9 @@
 #import "../shared/ATLRegistrationJob.h"
 #import <sys/stat.h>
 #import <dispatch/dispatch.h>
+// 记录已应答过的 nonce：多场景连续调用时，磁盘上的 request 可能是上一场景的残留，
+// 必须跳过旧 nonce 等本轮 begin 写出的新 request，否则本轮永远等不到匹配回复(11-05 CI 实证超时)。
+static NSString *gAnsweredNonce=nil;
 static void workbenchReply(NSString *files,NSString *email){
  dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT,0),^{
   // PFWorkbench 原生等待上限 20 秒；辅助线程窗口必须更长，否则高负载 CI 运行器上
@@ -10,14 +13,14 @@ static void workbenchReply(NSString *files,NSString *email){
   for(int i=0;i<800;i++){
    NSString *path=[files stringByAppendingPathComponent:@"workbench-request.json"];
    NSDictionary *r=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path]?:[NSData data] options:0 error:nil];
-   if(r[@"nonce"]){
+   if(r[@"nonce"] && ![r[@"nonce"] isEqual:gAnsweredNonce]){
     NSDictionary *reply=@{@"nonce":r[@"nonce"],@"ok":@YES,@"replace":@YES,@"old_email":r[@"email"],@"old_job":r[@"job"],@"old_status":@"done",@"config":@{@"EMAIL":email,@"PICKUP_API":[@"https://api.wdmail.top/m?e=" stringByAppendingString:email],@"USERNAME":@"",@"PASSWORD":@"",@"FULL_NAME":@"",@"COUNTRY":@"美国",@"ZIP":@"11714"}};
     // 与管理器一致: 先写临时文件并 chmod 0600, 再 rename 覆盖, rename 保持权限无竞态窗口
     NSString *out=[files stringByAppendingPathComponent:@"workbench-reply.json"];
     NSString *tmp=[files stringByAppendingPathComponent:@"workbench-reply.json.tmp"];
     [[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil] writeToFile:tmp atomically:NO];
     chmod(tmp.fileSystemRepresentation,0600);
-    [NSFileManager.defaultManager moveItemAtPath:tmp toPath:out error:nil];return;
+    [NSFileManager.defaultManager moveItemAtPath:tmp toPath:out error:nil];gAnsweredNonce=r[@"nonce"];return;
    }
    [NSThread sleepForTimeInterval:0.05];
   }
