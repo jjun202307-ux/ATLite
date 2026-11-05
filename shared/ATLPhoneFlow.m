@@ -133,7 +133,9 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    NSURLComponents *mailURL=[NSURLComponents componentsWithString:config[@"PICKUP_API"]];NSMutableArray *mailboxes=[NSMutableArray array];for(NSURLQueryItem *q in mailURL.queryItems)if([q.name isEqual:@"e"])[mailboxes addObject:[[q.value componentsSeparatedByString:@":"] firstObject]?:@""];
    if(![@[@"http",@"https"] containsObject:mailURL.scheme.lowercaseString] || !mailURL.host.length){PFError(error,@"取信链接不是有效HTTP/HTTPS地址");return nil;}
    if(s && [workbench[@"replace"] isEqual:@YES]){
-    if([s[@"state"] isEqual:@"blocked"] || ![@[@"error",@"cancelled",@"done",@"sms_required"] containsObject:workbench[@"old_status"]] || [[s[@"config"][@"EMAIL"] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]]){PFError(error,@"旧任务不能自动换账号，请核对工作台状态");return nil;}
+    // 用户规则（2026-11-05）：blocked 只是本账号的最终失败形态，不再拒绝换账号——
+    // 工作台已确认旧账号终态（old_status）且有新账号时，归档旧的、继续下一个。
+    if(![@[@"error",@"cancelled",@"done",@"sms_required"] containsObject:workbench[@"old_status"]] || [[s[@"config"][@"EMAIL"] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]]){PFError(error,@"旧任务不能自动换账号，请核对工作台状态");return nil;}
     NSString *archive=[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"archived-%@.json",workbench[@"nonce"]]];
     NSData *old=[NSJSONSerialization dataWithJSONObject:s options:0 error:error];
     if(!old || ![old writeToFile:archive options:NSDataWritingAtomic error:error] || chmod(archive.fileSystemRepresentation,0600)!=0)return nil;
@@ -147,7 +149,7 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
     if(ATLRegRemove(&store)!=1){PFError(error,@"旧断点归档未确认，未启动新账号");return nil;}s=nil;
    }
    if(s && ![s[@"config"][@"EMAIL"] isEqual:config[@"EMAIL"]]){
-    if([s[@"state"] isEqual:@"blocked"]){PFError(error,@"服务端已阻止此会话，已按要求停止");return nil;}
+    // blocked 不再整体停脚本：与正常旧断点同等归档，按取消记录后领新账号继续跑。
     NSString *path=[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"archived-local-%@.json",NSUUID.UUID.UUIDString]];
     NSData *old=[NSJSONSerialization dataWithJSONObject:s options:0 error:error];
     if(!old || ![old writeToFile:path options:NSDataWritingAtomic error:error] || chmod(path.fileSystemRepresentation,0600)!=0)return nil;
