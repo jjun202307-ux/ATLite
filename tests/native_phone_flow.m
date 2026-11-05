@@ -5,7 +5,9 @@
 #import <dispatch/dispatch.h>
 static void workbenchReply(NSString *files,NSString *email){
  dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT,0),^{
-  for(int i=0;i<100;i++){
+  // PFWorkbench 原生等待上限 20 秒；辅助线程窗口必须更长，否则高负载 CI 运行器上
+  // begin 还没写出 request 轮询就已结束，PFWorkbench 干等满 20s 撞测试超时(11-05 实证)。
+  for(int i=0;i<800;i++){
    NSString *path=[files stringByAppendingPathComponent:@"workbench-request.json"];
    NSDictionary *r=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path]?:[NSData data] options:0 error:nil];
    if(r[@"nonce"]){
