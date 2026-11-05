@@ -47,17 +47,22 @@ jobs:
             test "$i" = 3 && exit 1
           done
 
+      # install-sdk latest 走 api.github.com, 共享运行器 IP 常被限流(11-05 实证连续失败)。
+      # 固定版本直链下载 releases/download 资源, 不经过 API。
       - name: Setup Theos SDK
         run: |
           set -eux
+          SDK_URL="https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
+          mkdir -p "$THEOS/sdks"
           for i in 1 2 3; do
-            if "$THEOS/bin/install-sdk" latest; then
+            if curl -fL --connect-timeout 15 --retry 3 -o /tmp/sdk.tar.xz "$SDK_URL"; then
               break
             fi
-            echo "install-sdk attempt $i failed, retrying in 20s"
+            echo "sdk download attempt $i failed, retrying in 20s"
             sleep 20
             test "$i" = 3 && exit 1
           done
+          tar -xJf /tmp/sdk.tar.xz -C "$THEOS/sdks"
           ls "$THEOS/sdks"
 
       # Theos 官方无 roothide scheme 模块(vendor/mod 仅有 rootless, 其 deb.mk 强制
