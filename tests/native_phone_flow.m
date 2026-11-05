@@ -15,15 +15,22 @@ static void workbenchReply(NSString *files,NSString *email){
    NSDictionary *r=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path]?:[NSData data] options:0 error:nil];
    if(r[@"nonce"] && ![r[@"nonce"] isEqual:gAnsweredNonce]){
     NSDictionary *reply=@{@"nonce":r[@"nonce"],@"ok":@YES,@"replace":@YES,@"old_email":r[@"email"],@"old_job":r[@"job"],@"old_status":@"done",@"config":@{@"EMAIL":email,@"PICKUP_API":[@"https://api.wdmail.top/m?e=" stringByAppendingString:email],@"USERNAME":@"",@"PASSWORD":@"",@"FULL_NAME":@"",@"COUNTRY":@"美国",@"ZIP":@"11714"}};
-    // 与管理器一致: 先写临时文件并 chmod 0600, 再 rename 覆盖, rename 保持权限无竞态窗口
+    // 与管理器一致: 先写临时文件并 chmod 0600, 再 rename 覆盖, rename 保持权限无竞态窗口。
+    // 注意 moveItemAtPath 对已存在目标可能报错, 先删除再移动, 并打日志便于 CI 诊断。
     NSString *out=[files stringByAppendingPathComponent:@"workbench-reply.json"];
     NSString *tmp=[files stringByAppendingPathComponent:@"workbench-reply.json.tmp"];
-    [[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil] writeToFile:tmp atomically:NO];
+    NSData *rd=[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil];
+    if(![rd writeToFile:tmp atomically:NO]){fprintf(stderr,"helper: tmp write failed\n");return;}
     chmod(tmp.fileSystemRepresentation,0600);
-    [NSFileManager.defaultManager moveItemAtPath:tmp toPath:out error:nil];gAnsweredNonce=r[@"nonce"];return;
+    [NSFileManager.defaultManager removeItemAtPath:out error:nil];
+    NSError *moveErr=nil;
+    if(![NSFileManager.defaultManager moveItemAtPath:tmp toPath:out error:&moveErr]){fprintf(stderr,"helper: move failed: %s\n",moveErr.localizedDescription.UTF8String);return;}
+    fprintf(stderr,"helper: replied nonce %s\n",((NSString *)r[@"nonce"]).UTF8String);
+    gAnsweredNonce=r[@"nonce"];return;
    }
    [NSThread sleepForTimeInterval:0.05];
   }
+  fprintf(stderr,"helper: gave up waiting for fresh request\n");
  });
 }
 static void expireRetry(NSString *base){NSString *path=[base stringByAppendingPathComponent:@"PhoneFlow/registration-job.json"];NSMutableDictionary *s=[[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path] options:0 error:nil] mutableCopy];s[@"retryAfter"]=@0;[[NSJSONSerialization dataWithJSONObject:s options:0 error:nil] writeToFile:path atomically:YES];chmod(path.fileSystemRepresentation,0600);}
