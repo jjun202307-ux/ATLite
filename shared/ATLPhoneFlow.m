@@ -45,8 +45,19 @@ NSString *ATLPhoneMailCode(NSString *page){
  for(NSArray *pair in @[@[@"&lt;",@"<"],@[@"&gt;",@">"],@[@"&quot;",@"\""],@[@"&#39;",@"'"],@[@"&nbsp;",@" "],@[@"&amp;",@"&"]])s=[s stringByReplacingOccurrencesOfString:pair[0] withString:pair[1]];
  NSRegularExpression *tags=[NSRegularExpression regularExpressionWithPattern:@"<[^>]*>" options:NSRegularExpressionDotMatchesLineSeparators error:nil];
  s=[tags stringByReplacingMatchesInString:s options:0 range:NSMakeRange(0,s.length) withTemplate:@" "];
- NSRegularExpression *re=[NSRegularExpression regularExpressionWithPattern:@"(?:verification\\s+code|security\\s+code|confirmation\\s+code|your\\s+code|验证码|验证代码)[^0-9]{0,100}(?<![A-Za-z0-9_])([0-9]{6}|[0-9]{4})(?![A-Za-z0-9_]|[-/:][0-9])" options:NSRegularExpressionCaseInsensitive error:nil];
+ NSRegularExpression *re=[NSRegularExpression regularExpressionWithPattern:@"(?:verification\\s+code|security\\s+code|confirmation\\s+code|your\\s+code|code\\s+below|验证码|验证代码)[^0-9]{0,100}(?<![A-Za-z0-9_])([0-9]{6}|[0-9]{4})(?![A-Za-z0-9_]|[-/:][0-9])" options:NSRegularExpressionCaseInsensitive error:nil];
  NSMutableSet *codes=[NSMutableSet set];for(NSTextCheckingResult *m in [re matchesInString:s options:0 range:NSMakeRange(0,s.length)])[codes addObject:[s substringWithRange:[m rangeAtIndex:1]]];
+ // 2026-11-05 实证：Vinted 邮件文案为 "entering the code below on Vinted. The code expires in 30 minutes"，
+ // cue 与码之间有 "30" 这类数字阻断主匹配，且去标签后码不成行。兜底：邮件含验证码语义时，
+ // 收集边界完整的独立 4/6 位数字（日期带 -/: 后缀已排除），唯一候选才采用（与 Python 端逻辑一致）。
+ if(codes.count!=1){
+  NSRegularExpression *cue=[NSRegularExpression regularExpressionWithPattern:@"(?:verification|security|confirmation|code|verify|验证码)" options:NSRegularExpressionCaseInsensitive error:nil];
+  if([cue firstMatchInString:s options:0 range:NSMakeRange(0,s.length)]){
+   NSRegularExpression *standalone=[NSRegularExpression regularExpressionWithPattern:@"(?<![A-Za-z0-9_#])([0-9]{6}|[0-9]{4})(?![A-Za-z0-9_]|[-/:][0-9])" options:0 error:nil];
+   NSMutableSet *fallback=[NSMutableSet set];for(NSTextCheckingResult *m in [standalone matchesInString:s options:0 range:NSMakeRange(0,s.length)])[fallback addObject:[s substringWithRange:[m rangeAtIndex:1]]];
+   if(fallback.count==1)codes=fallback;
+  }
+ }
  return codes.count==1?codes.anyObject:nil;
 }
 NSString *ATLPhoneMailNewCode(NSString *page,NSString *baselineCode){NSString *code=ATLPhoneMailCode(page);return code && ![code isEqual:baselineCode]?code:nil;}
