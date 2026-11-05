@@ -5,7 +5,7 @@
 #import "../shared/ATLPhoneFlow.h"
 #import "../shared/ATLEnergySettings.h"
 static void ATEnergyInvalidate(void);
-// ATLiteTweak v0.3.37 — AutoTouch-style script runner (Dopamine roothide only)
+// ATLiteTweak v0.3.38 — AutoTouch-style script runner (Dopamine roothide only)
 //
 // 重写版。本文件遵循 docs/ERRORS.md 全部规避规则：
 //  - R1/R2/R3/R4/R5：所有私有符号名、枚举值、函数签名均标注权威来源，
@@ -1410,7 +1410,7 @@ static int l_phoneFlow(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.37 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.38 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1942,11 +1942,25 @@ static void ATDarwinCallback(CFNotificationCenterRef center,
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
                                         ATDarwinCallback, (__bridge CFStringRef)AT_DARWIN_NOTIFY,
                                         NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        // 外部控制轮询通道：局域网管理器经 SSH 直写 command.json，但手机沙箱里没有
+        // notify_post 可发 Darwin 通知，因此 SpringBoard 每 1.5s 轮询一次拾取命令。
+        // ATClaimCommandID 按 commandId 去重，与通知通道并存不会重复执行。
+        if (ATIsSpringBoard()) {
+            dispatch_source_t commandPoll = dispatch_source_create(
+                DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+            dispatch_source_set_timer(commandPoll, DISPATCH_TIME_NOW,
+                (int64_t)(1.5 * NSEC_PER_SEC), (int64_t)(0.3 * NSEC_PER_SEC));
+            dispatch_source_set_event_handler(commandPoll, ^{
+                ATDarwinCallback(NULL, NULL, NULL, NULL, NULL);
+            });
+            dispatch_resume(commandPoll);
+        }
         if (ATIsSpringBoard()) {
             ATLoadHIDSymbols();
             ATLoadCaptureSymbols();
         }
-        ATLog(@"v0.3.37 loaded in %@ (sb=%d, jbroot=%@ via %@)",
+        ATLog(@"v0.3.38 loaded in %@ (sb=%d, jbroot=%@ via %@)",
               NSBundle.mainBundle.bundleIdentifier ?: @"?", ATIsSpringBoard(),
               ATJBRoot(), gJBRootSource ?: @"?");
     }

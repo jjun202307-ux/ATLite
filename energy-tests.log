@@ -1,0 +1,94 @@
+test_injected_tweak_requires_versioned_arm64e (test_artifact_macho.ArtifactMachO.test_injected_tweak_requires_versioned_arm64e) ... ok
+test_malformed_executable_is_reported_without_crashing (test_artifact_macho.ArtifactMachO.test_malformed_executable_is_reported_without_crashing) ... ok
+test_signature_is_parsed_not_string_searched (test_artifact_macho.ArtifactMachO.test_signature_is_parsed_not_string_searched) ... ok
+test_truncation_is_rejected (test_artifact_macho.ArtifactMachO.test_truncation_is_rejected) ... ok
+test_lua_log_explicit_utf8 (test_capture_logging.CaptureLogging.test_lua_log_explicit_utf8) ... ok
+test_render_display_has_no_status_return (test_capture_logging.CaptureLogging.test_render_display_has_no_status_return) ... ok
+test_production_capture_and_utf8_log (test_capture_native.CaptureNative.test_production_capture_and_utf8_log) ... skipped 'requires macOS Foundation; CI executes this'
+test_dispatch_timeout_recovery_and_late_release (test_capture_timeout.CaptureTimeoutContract.test_dispatch_timeout_recovery_and_late_release) ... skipped 'requires macOS Foundation; CI executes this'
+test_measurement_precedes_capture_dispatch (test_capture_timeout.CaptureTimeoutContract.test_measurement_precedes_capture_dispatch) ... ok
+test_real_process_deadline_cancel_and_output (test_child_process.ChildProcess.test_real_process_deadline_cancel_and_output) ... skipped 'C compiler required'
+test_native_core (test_core_native.NativeCore.test_native_core) ... skipped 'Set ATL_CC to a C compiler; CI runs this test'
+test_exception_safe_descriptors_contract (test_email_job_contracts.EmailJobContract.test_exception_safe_descriptors_contract) ... ok
+test_routes_contract (test_email_job_contracts.EmailJobContract.test_routes_contract) ... ok
+test_shared_state_and_lock_contract (test_email_job_contracts.EmailJobContract.test_shared_state_and_lock_contract) ... ok
+test_missing_username_reports_failure (test_email_script.EmailScript.test_missing_username_reports_failure) ... ok
+test_success_is_from_ocr_not_email_prefix (test_email_script.EmailScript.test_success_is_from_ocr_not_email_prefix) ... ok
+test_legacy_capture_path_and_cleanup_are_explicit (test_energy_mode.EnergyModeTests.test_legacy_capture_path_and_cleanup_are_explicit) ... ok
+test_script_uses_optional_scope_and_keeps_old_runner_compatible (test_energy_mode.EnergyModeTests.test_script_uses_optional_scope_and_keeps_old_runner_compatible) ... ok
+test_actual_scope_ownership_errors_stop_and_preferences (test_energy_native.EnergyNative.test_actual_scope_ownership_errors_stop_and_preferences) ... skipped 'Foundation fixture requires macOS'
+test_empty_search_does_not_tap (test_extensions_lua.ExtensionsLua.test_empty_search_does_not_tap) ... ok
+test_paths_and_helpers (test_extensions_lua.ExtensionsLua.test_paths_and_helpers) ... ok
+test_swipe_and_interrupted_tap_release (test_extensions_lua.ExtensionsLua.test_swipe_and_interrupted_tap_release) ... ok
+test_tap_order_and_duration (test_extensions_lua.ExtensionsLua.test_tap_order_and_duration) ... ok
+test_status_and_file_delivery (test_http_native.NativeAppFixtures.test_status_and_file_delivery) ... skipped 'requires macOS Foundation and clang'
+test_duplicate_length_rejected_on_real_socket (test_http_native.NativeHTTPIntegration.test_duplicate_length_rejected_on_real_socket) ... skipped 'requires macOS Foundation and clang'
+test_email_roundtrip_and_stale_result (test_http_native.NativeHTTPIntegration.test_email_roundtrip_and_stale_result) ... skipped 'requires macOS Foundation and clang'
+test_files_and_errors (test_http_native.NativeHTTPIntegration.test_files_and_errors) ... skipped 'requires macOS Foundation and clang'
+test_canonical_injection_path_is_supported (test_jbroot_path.JBRootPath.test_canonical_injection_path_is_supported) ... ok
+test_production_path_parser (test_jbroot_path.JBRootPath.test_production_path_parser) ... skipped 'C compiler required'
+test_bootstrap_stack (test_lua_bridge.LuaBridge.test_bootstrap_stack) ... skipped 'C compiler required (CI provides cc)'
+test_pruning_matches_brute_force (test_ncc_equivalence.NCCEquivalence.test_pruning_matches_brute_force) ... skipped 'C compiler required'
+test_springboard_does_not_execute_vision (test_ocr_policy.OCRPolicy.test_springboard_does_not_execute_vision) ... ok
+test_worker_has_device_verified_permission_and_language_policy (test_ocr_policy.OCRPolicy.test_worker_has_device_verified_permission_and_language_policy) ... ok
+test_reply_validation_native (test_ocr_reply.OCRReply.test_reply_validation_native) ... skipped 'Foundation requires macOS'
+test_invalid_input_has_correlated_failure (test_ocr_worker_native.OCRWorker.test_invalid_input_has_correlated_failure) ... skipped 'requires macOS Foundation/ImageIO/Vision'
+test_completed_local_account_has_no_ui_side_effects (test_phone_flow.PhoneFlowLua.test_completed_local_account_has_no_ui_side_effects) ... ok
+test_missing_configuration_does_not_touch_screen (test_phone_flow.PhoneFlowLua.test_missing_configuration_does_not_touch_screen) ... ok
+test_mail_and_durable_checkpoints (test_phone_flow.PhoneFlowNative.test_mail_and_durable_checkpoints) ... skipped 'requires macOS Foundation'
+test_active_root_does_not_scan_stale_bootstraps (test_probe_abi.ProbeABI.test_active_root_does_not_scan_stale_bootstraps) ... ok
+test_compiled_webkit_signatures (test_probe_abi.ProbeABI.test_compiled_webkit_signatures) ... skipped 'host C compiler unavailable'
+test_probe_logs_include_correlated_outcomes (test_probe_reaper.ProbeReaperTest.test_probe_logs_include_correlated_outcomes) ... ok
+test_reaper_process_lifecycle (test_probe_reaper.ProbeReaperTest.test_reaper_process_lifecycle) ... skipped 'requires POSIX and clang'
+test_spawn_setup_failures (test_probe_reaper.ProbeReaperTest.test_spawn_setup_failures) ... skipped 'requires POSIX and clang'
+test_bounded_capture_and_wait (test_probe_regressions.ProbeSafetyContracts.test_bounded_capture_and_wait) ... ok
+test_hid_guard_and_abi (test_probe_regressions.ProbeSafetyContracts.test_hid_guard_and_abi) ... ok
+test_main_thread_screen (test_probe_regressions.ProbeSafetyContracts.test_main_thread_screen) ... ok
+test_missing_log_does_not_assert_injection_state (test_probe_regressions.ProbeSafetyContracts.test_missing_log_does_not_assert_injection_state) ... ok
+test_no_default_setuid (test_probe_regressions.ProbeSafetyContracts.test_no_default_setuid) ... ok
+test_no_fake_ui_completion (test_probe_regressions.ProbeSafetyContracts.test_no_fake_ui_completion) ... ok
+test_no_privileged_file_sink (test_probe_regressions.ProbeSafetyContracts.test_no_privileged_file_sink) ... ok
+test_probe_save_prepares_its_own_directory (test_probe_regressions.ProbeSafetyContracts.test_probe_save_prepares_its_own_directory) ... ok
+test_release_events_ready_before_touch_down (test_probe_regressions.ProbeSafetyContracts.test_release_events_ready_before_touch_down) ... ok
+test_release_uses_same_display_field (test_probe_regressions.ProbeSafetyContracts.test_release_uses_same_display_field) ... ok
+test_run_output_and_flush (test_probe_regressions.ProbeSafetyContracts.test_run_output_and_flush) ... ok
+test_surface_contract (test_probe_regressions.ProbeSafetyContracts.test_surface_contract) ... ok
+test_cli_redacts_and_bounds_input (test_registration_job_native.RegistrationJobNative.test_cli_redacts_and_bounds_input) ... skipped 'requires macOS Foundation'
+test_lifecycle_and_secret_scrubbing (test_registration_job_native.RegistrationJobNative.test_lifecycle_and_secret_scrubbing) ... skipped 'requires macOS Foundation'
+test_offline_backup_survives_scrubbing (test_registration_job_native.RegistrationJobNative.test_offline_backup_survives_scrubbing) ... skipped 'requires macOS Foundation'
+test_code_is_native_only_and_cleaned_on_exit (test_registration_lua_contract.RegistrationLuaContracts.test_code_is_native_only_and_cleaned_on_exit) ... ok
+test_password_is_not_returned_to_lua_and_is_wiped (test_registration_lua_contract.RegistrationLuaContracts.test_password_is_not_returned_to_lua_and_is_wiped) ... ok
+test_registration_source_linked_into_tweak (test_registration_lua_contract.RegistrationLuaContracts.test_registration_source_linked_into_tweak) ... ok
+test_interrupted_atomic_write (test_registration_state_native.RegistrationStateTests.test_interrupted_atomic_write) ... skipped 'C compiler required'
+test_private_atomic_storage (test_registration_state_native.RegistrationStateTests.test_private_atomic_storage) ... skipped 'C compiler required'
+test_transition_table (test_registration_state_native.RegistrationStateTests.test_transition_table) ... skipped 'C compiler required'
+test_abi_and_opaque_alpha (test_runtime_regressions.RuntimeContracts.test_abi_and_opaque_alpha) ... ok
+test_atomic_admission_and_finally (test_runtime_regressions.RuntimeContracts.test_atomic_admission_and_finally) ... ok
+test_deadline_sleep_and_search (test_runtime_regressions.RuntimeContracts.test_deadline_sleep_and_search) ... ok
+test_email_flow_and_ocr (test_runtime_regressions.RuntimeContracts.test_email_flow_and_ocr) ... ok
+test_files_and_probe_path (test_runtime_regressions.RuntimeContracts.test_files_and_probe_path) ... ok
+test_injection_scope (test_runtime_regressions.RuntimeContracts.test_injection_scope) ... ok
+test_keyboard_typing_pauses_and_corrections (test_runtime_regressions.RuntimeContracts.test_keyboard_typing_pauses_and_corrections) ... ok
+test_native_buffers_freed_before_lua_tables (test_runtime_regressions.RuntimeContracts.test_native_buffers_freed_before_lua_tables) ... ok
+test_stop_does_not_remove_flag_or_claim_idle (test_runtime_regressions.RuntimeContracts.test_stop_does_not_remove_flag_or_claim_idle) ... ok
+test_text_loading_and_quota (test_runtime_regressions.RuntimeContracts.test_text_loading_and_quota) ... ok
+test_command_dedup_native (test_stop_race.StopRace.test_command_dedup_native) ... skipped 'Foundation native fixture requires macOS'
+test_darwin_callback_serializes_handler_native (test_stop_race.StopRace.test_darwin_callback_serializes_handler_native) ... skipped 'Foundation native fixture requires macOS'
+test_production_stop_file_native (test_stop_race.StopRace.test_production_stop_file_native) ... skipped 'POSIX file APIs required'
+test_production_stop_logic_native (test_stop_race.StopRace.test_production_stop_logic_native) ... skipped 'Foundation native fixture requires macOS'
+test_corrected_character_events_and_no_correction (test_typing_events.TypingEvents.test_corrected_character_events_and_no_correction) ... skipped 'requires a C compiler'
+test_atomic_running_accessor_contract (test_web_regressions.WebRegression.test_atomic_running_accessor_contract)
+The public isRunning selector must use the atomic synthesized getter. ... ok
+test_body_framing_contract (test_web_regressions.WebRegression.test_body_framing_contract) ... ok
+test_deadline_and_capacity_contract (test_web_regressions.WebRegression.test_deadline_and_capacity_contract) ... ok
+test_decode_and_controls_contract (test_web_regressions.WebRegression.test_decode_and_controls_contract) ... ok
+test_filename_dom_behavior (test_web_regressions.WebRegression.test_filename_dom_behavior) ... ok
+test_listener_readiness_contract (test_web_regressions.WebRegression.test_listener_readiness_contract)
+Source contract: stale poll readiness cannot cause blocking accept. ... ok
+test_ownership_and_thread_failure_contract (test_web_regressions.WebRegression.test_ownership_and_thread_failure_contract) ... ok
+test_public_running_atomicity_matches_extension (test_web_regressions.WebRegression.test_public_running_atomicity_matches_extension) ... ok
+
+----------------------------------------------------------------------
+Ran 87 tests in 1.412s
+
+OK (skipped=29)
