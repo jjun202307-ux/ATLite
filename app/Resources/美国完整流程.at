@@ -1,4 +1,4 @@
--- 手机完整入口：工作台模式在开始时读取电脑账号，界面动作由手机自动执行。
+-- 纯手机入口：无需电脑、USB或SSH。由generate_phone_flow.py生成。
 local parts={}
 parts['US_准备_AMG_定位']=function()
 -- 仅识别 AMG 菜单；不触发“原始机器”或“一键新机”。
@@ -81,19 +81,41 @@ log('VINTED_DOWNLOAD_REQUESTED_VERIFY_INSTALLATION')
 end
 parts['US_准备_AppStore安装']=function()
 local function scan() return ocrText() end
+-- 2026-11-05 用户规则：搜索框定位优先找小放大镜图标（PHONE_store_search_mag.png，
+-- 38x44 物理像素，取自真机截图），不依赖框内占位文案——文案随 App Store 版本/语言必变。
+-- OCR 仅作兜底：公共前缀 'games, apps' 或上轮残留搜索词(vinted)在顶部搜索区。
+-- 冷启动加载慢，单轮识别必败，必须轮询等待。
 local function searchField()
-    for _,b in ipairs(scan()) do if (b.text or ''):lower():find('games, apps, stories',1,true) then return b end end
+    local icon=findImage('PHONE_store_search_mag.png',0.75,{x=0,y=120,width=120,height=160})
+    if icon and #icon==1 then return {x=icon[1][1],y=icon[1][2],width=0,height=0} end
+    for _,b in ipairs(scan()) do
+        local t=(b.text or ''):lower()
+        if t:find('games, apps',1,true) then return b end
+        if t:find('vinted',1,true) and b.y<260 then return b end
+    end
 end
-local b=searchField()
-if not b then
-    local hits=findText('Search');local tab=nil
-    for _,v in ipairs(hits or {}) do if v[2]>800 then tab=v end end
-    if not tab then error('App Store 搜索入口未找到') end
-    tap(tab[1],tab[2]);msleep(700);b=searchField()
+local b=nil
+for i=1,12 do
+    b=searchField()
+    if b then break end
+    if i==4 or i==8 then
+        -- 可能在其他标签页：点底部 Search 标签
+        local hits=findText('Search');local tab=nil
+        for _,v in ipairs(hits or {}) do if v[2]>800 then tab=v end end
+        if tab then tap(tab[1],tab[2]) end
+    end
+    msleep(1000)
 end
-if not b then error('App Store 搜索框未找到') end
+if not b then error('App Store 搜索框未找到（等待12秒仍无占位文案）') end
 tap(b.x+b.width/2,b.y+b.height/2);msleep(600)
-if screenWidth()~=414 or screenHeight()~=896 then error('键盘尺寸未确认') end
+-- 2026-11-05 实证：screenWidth/screenHeight 走 SpringBoard 主队列分发，主线程忙时
+-- 1.5s 超时返回 0（PHONE_SIZE_MISMATCH 假阳性根因），必须重试而不是一次判死。
+local sizeOk=false
+for i=1,10 do
+    if screenWidth()==414 and screenHeight()==896 then sizeOk=true;break end
+    msleep(500)
+end
+if not sizeOk then error('键盘尺寸未确认') end
 local searchKey=findText('search');local keyboard=false
 for _,q in ipairs(searchKey or {}) do if q[2]>600 then keyboard=true end end
 if not keyboard then error('搜索键盘未显示') end
@@ -120,7 +142,7 @@ local function matching(needle)
     end
     return result
 end
-local fields=matching('games, apps, stories')
+local fields=matching('games, apps')
 if #fields~=1 then error('App Store 搜索框不唯一；停止') end
 local field=fields[1]
 tap(field.x+field.width/2,field.y+field.height/2)
@@ -355,9 +377,17 @@ end
 end
 parts['open_form']=function()
 msleep(1000)
+-- 2026-11-05 实证：每次重装后首启 iOS 弹"允许 Vinted 使用无线数据？"系统弹窗挡住整个
+-- 页面（当日 4 次"美国版注册入口未找到"均因此）。见到就点"WLAN & Cellular"放行。
+for _=1,3 do
+ local dlg=findText('wireless data');local allow=findText('WLAN & Cellular')
+ if dlg and #dlg>0 and allow and #allow==1 then tap(allow[1][1],allow[1][2]);msleep(2000) else break end
+end
 local entry=nil
 for i=1,12 do
  local blocked=findText('session has been blocked');if blocked and #blocked>0 then log('VINTED_SESSION_BLOCKED');error('SERVER_BLOCKED_STOP') end
+ local dlg2=findText('WLAN & Cellular')
+ if dlg2 and #dlg2==1 and (not findText('Sign up for Vinted') or #findText('Sign up for Vinted')~=1) then tap(dlg2[1][1],dlg2[1][2]);msleep(2000) end
  entry=findText('Sign up for Vinted');if entry and #entry==1 then break end
  msleep(700)
 end
@@ -367,28 +397,124 @@ local email=nil
 for i=1,6 do email=findText('Continue with email');if email and #email==1 then break end;msleep(500) end
 if not email or #email~=1 then error('邮箱注册入口未找到') end
 tap(email[1][1],email[1][2]);msleep(800)
+-- 双表单：旧五字段(full name/email/password/zip code/username)与新三字段(username/email/password)
+-- 都必须通过（2026-11-05 实证新表单被旧的"必须有 full name+zip"误判拒掉）。
 local labels={['full name']=false,['username']=false,['email']=false,['password']=false,['zip code']=false}
 for _,b in ipairs(ocrText()) do local s=(b.text or ''):lower();if labels[s]~=nil then labels[s]=true end end
-for _,v in pairs(labels) do if not v then error('空白注册表单未确认') end end
+if not labels['email'] or not labels['password'] then error('空白注册表单未确认') end
+if not labels['full name'] and not labels['username'] then error('空白注册表单未确认') end
+log('OPEN_FORM_OK new='..tostring(not labels['full name']))
 end
 parts['observe']=function()
 -- 只观察页面，不触摸人机验证控件。
-local human,blocked,phone,field,verify,email=false,false,false,false,false,false
+local human,blocked,accountBlocked,phone,field,verify,email=false,false,false,false,false,false,false
 for _,b in ipairs(ocrText()) do
  local text=(b.text or ''):lower()
  local norm=text:gsub('[%s%p]','')
  if text:find('human',1,true) and text:find('verify',1,true) then human=true end
  if text:find('session has been blocked',1,true) then blocked=true end
+ -- 2026-11-05 实证：注册提交后可能直接出现账号级封禁页（Your account is blocked ... terms of use）
+ if text:find('account is blocked',1,true) or text:find('blocked your account',1,true) then accountBlocked=true end
  if text:find('phone number',1,true) then phone=true end
  if norm=='verify' then verify=true end
  if text:find('verification code',1,true) or text:find('enter code',1,true) then field=true end
  if text:find('email',1,true) or text:find('inbox',1,true) then email=true end
 end
-if blocked then log('PAGE_BLOCKED')
+if accountBlocked then log('PAGE_ACCOUNT_BLOCKED')
+elseif blocked then log('PAGE_BLOCKED')
 elseif human then log('PAGE_HUMAN_VERIFICATION')
 elseif phone then log('PAGE_PHONE_VERIFICATION')
 elseif field and (verify or email) then log('PAGE_EMAIL_CODE')
 else log('PAGE_UNKNOWN') end
+
+end
+parts['slider']=function()
+-- 欢迎滑块自动通过（依据：滑块实现计划书_2026-11-04.md / 步骤书）
+-- 全部元素模板化：盾牌图标判定页面，手柄模板动态定位（默认位置变了也能找到），
+-- 终点=手柄中心相对右移+222逻辑点（不做目标框模板），RETRY 橙色按钮模板检测重试。
+-- region 为逻辑点（内部×2转物理）。2026-11-05 实证：y起点140→物理280，盾牌模板顶268超出12px会整版漏检，区域必须含整模板。
+-- 日志标记：SLIDER_DETECTED / SLIDER_HANDLE_NOT_FOUND / SLIDER_PASSED / SLIDER_RETRY_TAPPED / SLIDER_RETRY_EXHAUSTED
+if screenWidth()~=414 or screenHeight()~=896 then error('设备尺寸不匹配') end
+
+local SIM=0.75
+local DRIFT_X=222 -- 终点=手柄中心右移距离（标定：目标框中心640.5 - 手柄中心197 = 443.5phys，÷2≈222）
+
+local function detectIcon()
+ -- 2026-11-05 实证：脚本首帧捕获可能为空，单发 findImage 会误判"非滑块页"，必须轮询
+ for i=1,3 do
+  local hits=findImage('PHONE_slider_shield.png',SIM,{x=110,y=110,width=200,height=240})
+  if hits and #hits>0 then return hits[1] end
+  msleep(500)
+ end
+ return nil
+end
+
+local function detectHandle(icon)
+ local region={x=icon[1]-200,y=icon[2]+225,width=240,height=90}
+ local hits=findImage('PHONE_slider_handle.png',SIM,region)
+ if not hits or #hits==0 then return nil end
+ return hits[1]
+end
+
+local function detectRetry(icon)
+ local region={x=icon[1]-140,y=icon[2]+200,width=280,height=90}
+ local hits=findImage('PHONE_slider_retry.png',SIM,region)
+ if not hits or #hits==0 then return nil end
+ return hits[1]
+end
+
+local function dragHandle(sx,sy,ex,ey)
+ local id=0
+ local ox=math.random(-3,3)
+ local oy=math.random(-3,3)
+ touchDown(id,sx+ox,sy+oy)
+ msleep(100+math.random(0,120))
+ local x=sx+ox
+ while x<ex-2 do
+  local step=math.random(5,22)
+  x=math.min(ex,x+step)
+  touchMove(id,x,sy+math.random(-2,2))
+  msleep(math.random(6,22))
+ end
+ msleep(80+math.random(0,80))
+ touchMove(id,ex+math.random(-1,1),ey+math.random(-2,2))
+ msleep(60+math.random(0,60))
+ touchUp(id,ex+math.random(-3,3),ey+math.random(-3,3))
+end
+
+local icon=detectIcon()
+if not icon then return end -- 非滑块页，静默（无 SLIDER_DETECTED 标记）
+log('SLIDER_DETECTED')
+for round=1,3 do
+ local handle=detectHandle(icon)
+ if not handle then
+  -- 过不了就重过：没有手柄说明挑战已是失败态，点 RETRY 重开，等15秒进入下一轮
+  local retry0=detectRetry(icon)
+  if retry0 then
+   log('SLIDER_RETRY_TAPPED')
+   tap(retry0[1],retry0[2])
+   msleep(15000)
+  else
+   log('SLIDER_HANDLE_NOT_FOUND')
+   return
+  end
+ else
+  local sx,sy=handle[1],handle[2]
+  log('SLIDER_DRAG round='..round..' start='..sx..','..sy)
+  dragHandle(sx,sy,sx+DRIFT_X,sy)
+  msleep(1500)
+  local retry=detectRetry(icon)
+  if not retry then
+   log('SLIDER_PASSED')
+   return
+  end
+  log('SLIDER_RETRY_TAPPED')
+  tap(retry[1],retry[2])
+  msleep(15000)
+ end
+end
+log('SLIDER_RETRY_EXHAUSTED')
+-- 滑块部分结束
 
 end
 parts['fill']=function()
@@ -743,9 +869,16 @@ local function relativeMatch(expected,y,threshold)
  return best>=threshold
 end
 local first,initial={},scan()
-for _,name in ipairs({'full name','username','email','password','zip code'}) do first[name]=exact(name,initial);if not first[name] then error('空白表单未确认') end end
+for _,name in ipairs({'full name','username','email','password','zip code'}) do first[name]=exact(name,initial) end
+-- 双表单变体（2026-11-05）：Vinted 有概率下发新表单（Username/Email/Password 三字段+双勾选框，
+-- 无 full name / zip code，Continue 按钮同色不同版式）。按首屏标签自动判别，两条路径共用
+-- 焦点、输入、条款勾选助手；不认识的表单按旧逻辑校验报错的防线保留。
+local isNewForm=(not first['full name']) and (not first['zip code']) and first['username']~=nil and first['email']~=nil and first['password']~=nil
+if not isNewForm then
+ for _,name in ipairs({'full name','username','email','password','zip code'}) do if not first[name] then error('空白表单未确认') end end
+end
 local job=getRegistrationJob();if not job or job.password~=nil then error('没有可用的注册任务') end
-log('REG_JOB '..job.jobId)
+log('REG_JOB '..job.jobId..(isNewForm and ' [新三字段表单]' or ' [旧五字段表单]'))
 local function focusField(b,name)
  tap(b.x+b.width/2,b.y+b.height/2);msleep(600)
  local current=exact(name)
@@ -775,8 +908,14 @@ local function inputField(name,value,threshold)
  end
  error('字段核验不明确，停止：'..name)
 end
-inputField('full name',job.fullName,0.60)
-inputField('email',job.email,0.60)
+if isNewForm then
+ -- 新表单按屏幕自上而下顺序填写：Username → Email → Password
+ inputField('username',job.username,0.60)
+ inputField('email',job.email,0.60)
+else
+ inputField('full name',job.fullName,0.60)
+ inputField('email',job.email,0.60)
+end
 local pass=exact('password');if not pass then error('密码栏未确认') end
 -- 用户确认全新空白表单的眼睛图标可能随机；只在此页面按密码栏右侧一次。
 local eyeX=screenWidth()-48
@@ -785,28 +924,39 @@ if eyeY<100 or eyeY>screenHeight()-100 then error('密码栏位置不明确') en
 tap(eyeX,eyeY);msleep(700)
 focusField(pass,'password');__atl_screen_context='password';inputRegistrationPassword();msleep(700)
 tap(eyeX,eyeY);msleep(700)
-inputField('username',job.username,0.60)
+if not isNewForm then inputField('username',job.username,0.60) end
 registrationStage('username_filled')
-local zip=exact('zip code');if not zip then error('ZIP字段未确认') end
-local zy=focusField(zip,'zip code')
-local keys=us_locate_numeric_keypad(scan(),screenWidth(),screenHeight(),getColor);if not keys then error('数字键盘未确认') end
-for i=1,5 do
- local pt=keys[job.zip:sub(i,i)];if not pt then error('数字键缺失') end
- tap(pt[1],pt[2]);msleep(math.random(100,500))
+if isNewForm then
+ -- 新表单无 ZIP 字段：滑动收起键盘后条款与按钮已在视野内，直接进入条款确认
+ registrationStage('fields_ready')
+ swipe(200,530,200,250,450);msleep(1200)
+else
+ local zip=exact('zip code');if not zip then error('ZIP字段未确认') end
+ local zy=focusField(zip,'zip code')
+ local keys=us_locate_numeric_keypad(scan(),screenWidth(),screenHeight(),getColor);if not keys then error('数字键盘未确认') end
+ for i=1,5 do
+  local pt=keys[job.zip:sub(i,i)];if not pt then error('数字键缺失') end
+  tap(pt[1],pt[2]);msleep(math.random(100,500))
+ end
+ local zipConfirmed=false
+ for _=1,2 do msleep(700);if relativeMatch(job.zip,zy,0.60) then zipConfirmed=true;break end end
+ if not zipConfirmed then error('ZIP核验不明确') end
+ registrationStage('fields_ready')
+ -- 数字键盘无 Done：在表单区域向上滑动，之后由条款和按钮重新定位复核。
+ swipe(200,530,200,250,450);msleep(1200)
 end
-local zipConfirmed=false
-for _=1,2 do msleep(700);if relativeMatch(job.zip,zy,0.60) then zipConfirmed=true;break end end
-if not zipConfirmed then error('ZIP核验不明确') end
-registrationStage('fields_ready')
--- 数字键盘无 Done：在表单区域向上滑动，之后由条款和按钮重新定位复核。
-swipe(200,530,200,250,450);msleep(1200)
 local function anchor()
  local found=nil
  for _,b in ipairs(scan()) do local t=normalized(b.text):gsub('%s','');if t:find('terms&conditions',1,true) then if found then error('条款标签不唯一') end;found={x=b.x+b.width/2,y=b.y+b.height/2} end end
  return found
 end
 local function area(a) return {x=0,y=math.max(0,math.floor(a.y-40)),width=80,height=80} end
-local function empty(a) local h=findImage('US400_calibrated_unchecked.png',0.75,area(a));if #h==1 then return {x=h[1][1],y=h[1][2]} end end
+-- 新旧表单的勾选框尺寸不同（旧60×60、新56×60物理像素），两套模板依次尝试
+local function empty(a)
+ local h=findImage('US400_calibrated_unchecked.png',0.75,area(a))
+ if #h~=1 then h=findImage('US400_reg2_unchecked.png',0.75,area(a)) end
+ if #h==1 then return {x=h[1][1],y=h[1][2]} end
+end
 local function checked(a) local h=findImage('US400_reg_checked.png',0.75,area(a));if #h==1 then return {x=h[1][1],y=h[1][2]} end end
 local function classify(q) return us_checkbox_classify(getColor,q.x,q.y,screenWidth(),screenHeight()) end
 local state=us_check_terms_once(anchor,empty,checked,classify,function(q) tap(q.x,q.y) end,msleep,3)
@@ -817,22 +967,28 @@ for _,b in ipairs(scan()) do
   if text:find(phrase,1,true) then error('表单存在校验提示，停止提交') end
  end
 end
-local button=findImage('US400_reg_continue.png',0.75,{x=0,y=550,width=414,height=260})
+-- 新旧表单 Continue 按钮版式不同（旧模板对新按钮 NCC 仅 0.14），两套模板依次尝试；
+-- 搜索区上沿扩到 480：新按钮中心在逻辑 y≈546，模板顶会到 508，旧区起点 550 会漏。
+local button=findImage('US400_reg_continue.png',0.75,{x=0,y=480,width=414,height=330})
+if #button~=1 then button=findImage('US400_reg2_continue.png',0.75,{x=0,y=480,width=414,height=330}) end
 if #button~=1 then error('Continue按钮未确认') end
 registrationStage('begin_submit');tap(button[1][1],button[1][2]);msleep(600)
+local humanSeen=false
 for _=1,12 do
  local blocks=scan();local human=false;local field=false
  for _,b in ipairs(blocks) do
   local t=normalized(b.text)
   if t:find('session has been blocked',1,true) then error('SERVER_BLOCKED_STOP') end
+  if t:find('account is blocked',1,true) or t:find('blocked your account',1,true) then error('ACCOUNT_BLOCKED_RESULT') end
   if t:find('human',1,true) and t:find('verify',1,true) then human=true end
   if t:find('phone number',1,true) then error('SMS_REQUIRED_RESULT') end
   if t:find('verification code',1,true) or t:find('check your inbox',1,true) then field=true end
  end
- if human then error('HUMAN_VERIFICATION_PAUSE') end
+ if human then humanSeen=true end
  if field then registrationStage('verification_seen');return end
  msleep(700)
 end
+if humanSeen then log('HUMAN_VERIFY_SEEN');return end
 error('SUBMIT_RESULT_UNKNOWN_STOP')
 
 end
@@ -1206,14 +1362,10 @@ error('验证码提交后结果不明确，请人工核对')
 
 end
 
-local function readFrame(body)
- if type(withScreen)=='function' then return withScreen(body) end
- return body()
-end
 local function run(name)
  local output={};local realLog=log
  log=function(s) output[#output+1]=tostring(s);realLog(s) end
- local ok,result=pcall(function() return readFrame(parts[name]) end);log=realLog
+ local ok,result=pcall(parts[name]);log=realLog
  if not ok then error(result) end
  return table.concat(output,'\n')
 end
@@ -1247,7 +1399,7 @@ end
 local function amg()
  AMG_BUSY_SEEN=false
  openApp('AMG','amg');run('US_准备_AMG执行_开发中')
- while true do
+ for i=1,3 do
   local result=run('US_准备_AMG监测_开发中')
   if has(result,'AMG_ERROR') or has(result,'AMG_UNCERTAIN') then error('AMG_RESULT_UNKNOWN_STOP') end
   if has(result,'AMG_LEFT_TO_HOME') then error('AMG_EXITED') end
@@ -1278,6 +1430,31 @@ local function proxyOn()
  if shadowState()~='off' then tap(350,134);msleep(2000) end
  error('PROXY_CONNECT_TIMEOUT')
 end
+local function passWelcomeSlider()
+ local result=run('slider')
+ return has(result,'SLIDER_PASSED')
+end
+-- 系统弹窗通用处理（2026-11-05 实证：注册提交后 iOS 弹"Vinted Would Like to Send You
+-- Notifications"，挡住主屏和 App 内容导致 APP_LABEL_NOT_FOUND / PAGE_UNKNOWN）。点 Don't Allow。
+local function dismissSystemDialogs()
+ for i=1,4 do
+  local deny=nil
+  for _,b in ipairs(ocrText()) do
+   local t=(b.text or ''):lower()
+   if t:find('send you notifications',1,true) or t:find('would like to send',1,true) then
+    for _,c in ipairs(ocrText()) do
+     local u=(c.text or ''):lower()
+     if (u:find("don't allow",1,true) or u:find('don’t allow',1,true)) and not deny then deny=c end
+    end
+    break
+   end
+  end
+  if not deny then return end
+  tap(deny.x+(deny.width or 0)/2,deny.y+(deny.height or 0)/2)
+  msleep(1000)
+  log('DISMISSED_NOTIFY_DIALOG')
+ end
+end
 local function openForm()
  local s=run('US_准备_注册页前置')
  if has(s,'VINTED_FORM_READY') then return end
@@ -1288,31 +1465,60 @@ local function openForm()
  run('open_form')
 end
 local function waitCode()
+ -- 0.3.35起不固定轮数上限：按页面和邮件持续观察，直到得到结果、实际操作出错或用户点停止。
+ -- 恢复本阶段时屏幕可能停在ATLite等前台，先把Vinted拉回前台再观察，避免对错误页面空转。
+ dismissSystemDialogs()
+ local ok,err=pcall(openApp,'Vinted','vinted')
+ if ok then log('已切回Vinted，开始观察接码页面') else log('未能自动切回Vinted（'..tostring(err)..'），按当前屏幕观察') end
  while true do
+  dismissSystemDialogs()
   local page=run('observe')
+  if has(page,'PAGE_ACCOUNT_BLOCKED') then error('ACCOUNT_BLOCKED_RESULT') end
   if has(page,'PAGE_BLOCKED') then error('SERVER_BLOCKED_STOP') end
   if has(page,'PAGE_PHONE_VERIFICATION') then phoneFlow('sms');return end
   if has(page,'PAGE_HUMAN_VERIFICATION') then log('请手动完成人机验证，脚本会继续观察') end
+  if has(page,'PAGE_UNKNOWN') then
+   local sample={}
+   for _,b in ipairs(ocrText()) do local t=(b.text or ''):gsub('%s+',' ');if #t>0 then sample[#sample+1]=t end end
+   local diag='UNKNOWN_PAGE_DIAG screen='..screenWidth()..'x'..screenHeight()..' colors='..getColor(207,222)..','..getColor(207,470)..','..getColor(207,800)..' ocr='..table.concat(sample,' | ')
+   log(diag:sub(1,500))
+   log('未知页面，保存诊断后暂停，保留当前断点')
+   error('UNKNOWN_PAGE_PAUSE')
+  end
   local ok,mail=pcall(phoneFlow,'mail')
   if ok and mail.state=='code_ready' and has(page,'PAGE_EMAIL_CODE') then local result=run('verify');if has(result,'REG_SMS_REQUIRED') then phoneFlow('sms') end;return end
   msleep(2000)
  end
- error('MAIL_WAIT_TIMEOUT_STOP')
 end
-if screenWidth()~=414 or screenHeight()~=896 then error('PHONE_SIZE_MISMATCH') end
-log('开始：读取工作台账号和状态')
+-- 2026-11-05 实证：screenWidth/screenHeight 走 SpringBoard 主队列分发，主线程忙时
+-- 1.5s 超时返回 0，单次判死会在 11:14 那样误杀整个脚本（PHONE_SIZE_MISMATCH 假阳性）。重试 10 次。
+do
+ local sizeOk=false
+ for i=1,10 do
+  if screenWidth()==414 and screenHeight()==896 then sizeOk=true;break end
+  msleep(500)
+ end
+ if not sizeOk then error('PHONE_SIZE_MISMATCH') end
+end
+-- 连续运行（2026-11-05 用户规则）：单账号失败不停止。失败后经工作台标记失败后
+-- 自动领取下一个账号，一直跑到工作台没有可领取账号为止。
+local previousEmail=''
+local function runOneAccount()
+log('正在读取启动账号和最新状态；工作台模式请保持电脑管理器在线')
 local state=phoneFlow('begin')
-log('账号已就绪，下一阶段序号：'..state.next)
-if state.state=='blocked' then error('SERVER_BLOCKED_STOP') end
-if state.state=='sms_pending' then phoneFlow('sms');log('已补写短信验证结果，本轮完成');return end
-if state.state=='done' or state.state=='sms_required' then log('该账号已经完成，不会重复注册');return end
+log('启动账号已确认，从保存的正确阶段继续')
+local email=state.email or ''
+if previousEmail~='' and email==previousEmail then log('没有新账号，结束循环');return 'ended' end
+previousEmail=email
+if state.state=='blocked' then phoneFlow('blocked');log('服务端阻止本账号，已记录，进入下一个账号');return 'completed' end
+if state.state=='sms_pending' then phoneFlow('sms');log('已补写短信验证结果，本轮完成');return 'completed' end
+if state.state=='done' or state.state=='sms_required' then log('该账号已经完成，不会重复注册');return 'completed' end
 if state.job~='' and state.next>11 then
  local job=phoneFlow('job_status')
- if job.state=='done' then phoneFlow('finish');log('已恢复完成记录');return end
- openApp('Vinted','vinted')
+ if job.state=='done' then phoneFlow('finish');log('已恢复完成记录');return 'completed' end
  if job.state=='review' then
   local page=run('observe')
-  if not has(page,'PAGE_EMAIL_CODE') then error('REVIEW_REQUIRED_NO_RESUBMIT') end
+  if not has(page,'PAGE_EMAIL_CODE') then log('结果待核对，不能重新提交，进入下一个账号');return 'completed' end
   state=phoneFlow('resume_mail')
  end
 end
@@ -1325,8 +1531,9 @@ local stages={
  {'安装Vinted',function()
   if installed() then return end
   openApp('App Store','appstore');run('US_准备_AppStore安装')
-  log('等待App Store完成安装，可随时停止')
-  while true do local h=findText('OPEN');if h and #h>0 then return end;msleep(4000) end
+-- 2026-11-05 用户规则：等"OPEN"最多5分钟（75轮×4秒），超时判本账号失败换下一个，禁止无限卡死任务。
+  for i=1,75 do local h=findText('OPEN');if h and #h>0 then return end;msleep(4000) end
+  error('INSTALL_WAIT_TIMEOUT_STOP')
  end},
  {'第二次AMG',amg},
  {'第二次Safari清理',safari},
@@ -1334,7 +1541,16 @@ local stages={
  {'第三次AMG',amg},
  {'打开注册页',openForm},
  {'领取本机账号和读取旧邮件基线',function() phoneFlow('prepare_account') end},
- {'填写并单次提交',function() run('fill') end},
+ {'填写并单次提交',function()
+  local fillResult=run('fill')
+  -- 点 Continue 后见到 human/verify：给欢迎滑块机会（3次、每次15秒，见 US_滑块.at）。
+  -- 3次用尽仍过不了 = 本账号失败，直接领下一个账号（脚本规则，不停不等人工）。
+  if has(fillResult,'HUMAN_VERIFY_SEEN') then
+   if passWelcomeSlider() then log('欢迎滑块已通过');return end
+   error('SLIDER_FAILED')
+  end
+  if passWelcomeSlider() then log('欢迎滑块已通过') end
+ end},
  {'接码和注册后续页面',waitCode},
 }
 for index=state.next+1,#stages do
@@ -1345,12 +1561,35 @@ for index=state.next+1,#stages do
   local ok,problem=pcall(item[2])
   if ok then local current=phoneFlow('status');if current.state=='sms_required' then log('需要接短信码，本轮完成并已保存');return end;phoneFlow('stage_done',index-1);log('阶段完成：'..item[1]);break end
   local message=tostring(problem)
-  if has(message,'SERVER_BLOCKED_STOP') then phoneFlow('blocked');error(message) end
-  if has(message,'SMS_REQUIRED') then phoneFlow('sms');log('需要接短信码，本轮完成并已保存');return end
-  if index>=13 then error(message) end
+  if has(message,'SERVER_BLOCKED_STOP') then phoneFlow('blocked');log('服务端阻止本账号，已记录，进入下一个账号');return 'completed' end
+  if has(message,'SMS_REQUIRED') then phoneFlow('sms');log('需要接短信码，本轮完成并已保存');return 'completed' end
+  if index>=13 or has(message,'_STOP') or has(message,'_PAUSE') then error(message) end
   phoneFlow('stage_failed',index-1)
   if attempt>=3 then error(message) end
   log('当前步骤15秒后重试：'..item[1]);msleep(15000)
  end
 end
-phoneFlow('finish');log('手机完整流程完成，结果已保存到results.txt')
+phoneFlow('finish');log('手机完整流程完成，结果已保存到results.txt');return 'completed'
+end
+-- 外层保护：单账号错误默认标记失败并进入下一个；_PAUSE 例外——它是"等人工"信号
+-- （仅 UNKNOWN_PAGE_PAUSE：接码阶段页面无法识别，账号保留、脚本停住）。
+-- 注意：滑块3次不过不是 _PAUSE，而是 SLIDER_FAILED → 正常记失败领下一个账号（脚本规则）。
+local MAX_CONSECUTIVE_FAILURES=10
+local consecutiveFailures=0
+while true do
+ local ok,result=pcall(runOneAccount)
+ if not ok then
+  local message=tostring(result)
+  if message:find('工作台没有可领取的未处理账号',1,true) then log('工作台没有可领取的账号，结束循环');break end
+  if message:find('_PAUSE',1,true) then log('需要人工处理，脚本暂停（账号已保留）：'..message);break end
+  consecutiveFailures=consecutiveFailures+1
+  log('本账号失败（连续第'..consecutiveFailures..'个）：'..message)
+  if message:find('ACCOUNT_BLOCKED_RESULT',1,true) then local okb=pcall(phoneFlow,'blocked');if okb then log('已向工作台上报封号') end end
+ else
+  consecutiveFailures=0
+  if result=='ended' then log('没有新账号，结束循环');break end
+ end
+ if consecutiveFailures>=MAX_CONSECUTIVE_FAILURES then error('连续'..MAX_CONSECUTIVE_FAILURES..'个账号失败，暂停等待人工检查（排除问题后可再次运行）') end
+ log('等待15秒后处理下一个账号');msleep(15000)
+end
+log('本次运行结束')

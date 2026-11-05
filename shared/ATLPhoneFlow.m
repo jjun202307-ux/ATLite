@@ -7,6 +7,9 @@
 
 static void PFError(NSError **e,NSString *s){if(e)*e=[NSError errorWithDomain:@"ATLPhoneFlow" code:1 userInfo:@{NSLocalizedDescriptionKey:s}];}
 static NSString *PFHash(NSString *s){NSData *d=[s dataUsingEncoding:NSUTF8StringEncoding];unsigned char b[CC_SHA256_DIGEST_LENGTH];CC_SHA256(d.bytes,(CC_LONG)d.length,b);NSMutableString *r=[NSMutableString string];for(unsigned i=0;i<sizeof b;i++)[r appendFormat:@"%02x",b[i]];return r;}
+// 接码诊断：追加到 PhoneFlow/mail-diag.log（限 64KB 滚动，不落验证码明文），供 SSH 直接读取定位静默卡死环节。
+static void PFMailDiag(NSString *base,NSString *fmt,...) NS_FORMAT_FUNCTION(2,3);
+static void PFMailDiag(NSString *base,NSString *fmt,...){va_list a;va_start(a,fmt);NSString *line=[[NSString alloc]initWithFormat:fmt arguments:a];va_end(a);NSString *dir=[base stringByAppendingPathComponent:@"PhoneFlow"];[[NSFileManager defaultManager]createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];NSString *path=[dir stringByAppendingPathComponent:@"mail-diag.log"];NSString *stamp=[NSDateFormatter localizedStringFromDate:NSDate.date dateStyle:NSDateFormatterNoStyle timeStyle:NSDateFormatterMediumStyle];NSString *row=[NSString stringWithFormat:@"[%@] %@\n",stamp,line];NSError *e=nil;NSString *old=[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];if(old.length>65536)old=[old substringFromIndex:old.length/2];[((old?:@"")stringByAppendingString:row)writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&e];(void)e;}
 
 // No redirects and no unbounded buffered response; request URLs are never logged.
 @interface ATLPhoneMailRequest:NSObject<NSURLSessionDataDelegate>
@@ -226,9 +229,15 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],error);if(!job)return nil;
    if([job[@"state"] isEqual:@"code_ready"])return @{@"state":@"code_ready"};
    if(![job[@"state"] isEqual:@"wait_code"]){PFError(error,@"当前任务不在等待邮箱验证码阶段");return nil;}
-   NSString *page=PFFetch(c[@"EMAIL"],c[@"PICKUP_API"],stopped,error);if(!page)return nil;
+   // 2026-11-05 接码静默卡死排查：取信每一步写诊断文件（不落验证码明文，只记掩码与计数）。
+   NSError *fetchErr=nil;NSString *page=PFFetch(c[@"EMAIL"],c[@"PICKUP_API"],stopped,&fetchErr);
+   PFMailDiag(base,@"fetch %@",page?@"ok":[NSString stringWithFormat:@"FAIL %@",fetchErr.localizedDescription?:@"?"]);
+   if(!page){if(error)*error=fetchErr;return nil;}
+   PFMailDiag(base,@"bytes %lu changed %d",(unsigned long)page.length,(int)![PFHash(page) isEqual:s[@"baseline"]]);
    if([PFHash(page) isEqual:s[@"baseline"]])return @{@"state":@"wait_code"};
-   NSString *code=ATLPhoneMailNewCode(page,s[@"baseline_code"]?:@"");if(!code)return @{@"state":@"wait_code"};
+   NSString *code=ATLPhoneMailNewCode(page,s[@"baseline_code"]?:@"");
+   PFMailDiag(base,@"candidates %@",code?[NSString stringWithFormat:@"UNIQUE %@****",[code substringToIndex:MIN(2,code.length)]]:@"none");
+   if(!code)return @{@"state":@"wait_code"};
    return ATLRegistrationSetCode(reg,s[@"job"],code,error)?@{@"state":@"code_ready"}:nil;
   }
   if([action isEqual:@"finish"]){
