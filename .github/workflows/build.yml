@@ -30,13 +30,34 @@ jobs:
 
       # iOS14+ SpringBoard injection needs the versioned arm64e ABI.
       # Use Apple's Xcode compiler/linker, not the legacy Linux clang11 toolchain.
-      - name: Setup Theos
+      # 网络抖动会导致 clone/install-sdk 瞬时失败(11-05 实证: Setup Theos 30 秒内失败)。
+      # 拆分两步 + 重试, 让日志能区分"clone 挂"还是"sdk 挂"。
+      - name: Clone Theos
         run: |
           set -eux
           xcodebuild -version
           xcrun --sdk iphoneos clang --version
-          git clone --recursive --depth=1 https://github.com/theos/theos.git "$THEOS"
-          "$THEOS/bin/install-sdk" latest
+          for i in 1 2 3; do
+            rm -rf "$THEOS"
+            if git clone --recursive --depth=1 https://github.com/theos/theos.git "$THEOS"; then
+              break
+            fi
+            echo "theos clone attempt $i failed, retrying in 20s"
+            sleep 20
+            test "$i" = 3 && exit 1
+          done
+
+      - name: Setup Theos SDK
+        run: |
+          set -eux
+          for i in 1 2 3; do
+            if "$THEOS/bin/install-sdk" latest; then
+              break
+            fi
+            echo "install-sdk attempt $i failed, retrying in 20s"
+            sleep 20
+            test "$i" = 3 && exit 1
+          done
           ls "$THEOS/sdks"
 
       # Theos 官方无 roothide scheme 模块(vendor/mod 仅有 rootless, 其 deb.mk 强制
