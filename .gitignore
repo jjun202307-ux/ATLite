@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+energy-static.log
+energy-tests.log
