@@ -133,9 +133,9 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
    NSURLComponents *mailURL=[NSURLComponents componentsWithString:config[@"PICKUP_API"]];NSMutableArray *mailboxes=[NSMutableArray array];for(NSURLQueryItem *q in mailURL.queryItems)if([q.name isEqual:@"e"])[mailboxes addObject:[[q.value componentsSeparatedByString:@":"] firstObject]?:@""];
    if(![@[@"http",@"https"] containsObject:mailURL.scheme.lowercaseString] || !mailURL.host.length){PFError(error,@"取信链接不是有效HTTP/HTTPS地址");return nil;}
    if(s && [workbench[@"replace"] isEqual:@YES]){
-    // 用户规则（2026-11-05）：blocked 只是本账号的最终失败形态，不再拒绝换账号——
-    // 工作台已确认旧账号终态（old_status）且有新账号时，归档旧的、继续下一个。
-    if(![@[@"error",@"cancelled",@"done",@"sms_required"] containsObject:workbench[@"old_status"]] || [[s[@"config"][@"EMAIL"] lowercaseString] isEqual:[config[@"EMAIL"] lowercaseString]]){PFError(error,@"旧任务不能自动换账号，请核对工作台状态");return nil;}
+    // 用户规则（2026-11-05）：工作台是唯一权威——管理器只在旧账号已标终态且确有下一条
+    // draft 时才回 replace=true，手机端不再二次校验（旧的白名单/同邮箱校验属于"没用的
+    // 限制"，11-05 实证会误拒、白白烧掉一个账号）。直接归档旧任务、换新账号继续跑。
     NSString *archive=[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"archived-%@.json",workbench[@"nonce"]]];
     NSData *old=[NSJSONSerialization dataWithJSONObject:s options:0 error:error];
     if(!old || ![old writeToFile:archive options:NSDataWritingAtomic error:error] || chmod(archive.fileSystemRepresentation,0600)!=0)return nil;
