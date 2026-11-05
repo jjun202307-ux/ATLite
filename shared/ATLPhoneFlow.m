@@ -95,7 +95,9 @@ static NSDictionary *PFWorkbench(NSString *base,NSDictionary *state,ATLPhoneFlow
  NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:20];
  while(deadline.timeIntervalSinceNow>0){
   if(stopped && stopped()){PFError(error,@"启动同步已停止");return nil;}
-  NSString *text=PFReadText([files stringByAppendingPathComponent:@"workbench-reply.json"],16384,YES,error);if(!text)return nil;
+  // 读取失败的错误分支多半是管理器正在写入的权限竞态(先 rename 后 chmod 的窗口)，
+  // 清错等待下轮重读，而不是立刻判 begin 失败(11-05 CI 实证命中该竞态)。
+  NSString *text=PFReadText([files stringByAppendingPathComponent:@"workbench-reply.json"],16384,YES,error);if(!text){if(error&&*error){*error=nil;[NSThread sleepForTimeInterval:0.2];continue;}return nil;}
   NSDictionary *reply=text.length?[NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]:nil;
   if([reply isKindOfClass:NSDictionary.class] && [reply[@"nonce"] isEqual:nonce]){
    if(![reply[@"ok"] isEqual:@YES]){PFError(error,[reply[@"message"] isKindOfClass:NSString.class]?reply[@"message"]:@"工作台未分配账号");return nil;}

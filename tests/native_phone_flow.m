@@ -12,8 +12,12 @@ static void workbenchReply(NSString *files,NSString *email){
    NSDictionary *r=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path]?:[NSData data] options:0 error:nil];
    if(r[@"nonce"]){
     NSDictionary *reply=@{@"nonce":r[@"nonce"],@"ok":@YES,@"replace":@YES,@"old_email":r[@"email"],@"old_job":r[@"job"],@"old_status":@"done",@"config":@{@"EMAIL":email,@"PICKUP_API":[@"https://api.wdmail.top/m?e=" stringByAppendingString:email],@"USERNAME":@"",@"PASSWORD":@"",@"FULL_NAME":@"",@"COUNTRY":@"美国",@"ZIP":@"11714"}};
+    // 与管理器一致: 先写临时文件并 chmod 0600, 再 rename 覆盖, rename 保持权限无竞态窗口
     NSString *out=[files stringByAppendingPathComponent:@"workbench-reply.json"];
-    [[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil] writeToFile:out atomically:YES];chmod(out.fileSystemRepresentation,0600);return;
+    NSString *tmp=[files stringByAppendingPathComponent:@"workbench-reply.json.tmp"];
+    [[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil] writeToFile:tmp atomically:NO];
+    chmod(tmp.fileSystemRepresentation,0600);
+    [NSFileManager.defaultManager moveItemAtPath:tmp toPath:out error:nil];return;
    }
    [NSThread sleepForTimeInterval:0.05];
   }
