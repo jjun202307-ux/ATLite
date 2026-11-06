@@ -257,12 +257,15 @@ NSDictionary *ATLPhoneFlowCommitCode(NSString *base,NSString *code,NSError **err
  if(![code isKindOfClass:NSString.class] || ![code stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length){PFError(error,@"commit_code: 验证码为空");return nil;}
  NSRegularExpression *format=[NSRegularExpression regularExpressionWithPattern:@"^(?:[0-9]{4}|[0-9]{6})$" options:0 error:nil];
  if([format numberOfMatchesInString:code options:0 range:NSMakeRange(0,code.length)]!=1){PFError(error,@"commit_code: 验证码格式无效（须4或6位数字）");return nil;}
- ATLRegStore store;if(!ATLRegAcquire(base,&store,error))return nil;
+ NSString *directory=[base stringByAppendingPathComponent:@"PhoneFlow"];
+ ATLRegStore store;if(!ATLRegOpen(&store,directory.fileSystemRepresentation)){PFError(error,@"手机流程状态正在使用或权限不正确");return nil;}
  @try {
-  NSMutableDictionary *s=ATLRegLoad(&store,error);if(!s)return nil;
+  NSDictionary *saved=ATLBackupRead(&store);
+  NSString *jobID=[saved isKindOfClass:NSDictionary.class]?saved[@"job"]:nil;
+  if(![jobID isKindOfClass:NSString.class] || !jobID.length){PFError(error,@"当前没有进行中的注册任务");return nil;}
   NSString *reg=[base stringByAppendingPathComponent:@"Registration"];
-  NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],error);if(!job)return nil;
+  NSDictionary *job=ATLRegistrationStatus(reg,jobID,error);if(!job)return nil;
   if(![job[@"state"] isEqual:@"wait_code"]){PFError(error,@"当前任务不在等待邮箱验证码阶段，不能提交验证码");return nil;}
-  return ATLRegistrationSetCode(reg,s[@"job"],code,error)?@{@"state":@"code_ready"}:nil;
+  return ATLRegistrationSetCode(reg,jobID,code,error)?@{@"state":@"code_ready"}:nil;
  }@finally{ATLRegClose(&store);}
 }
