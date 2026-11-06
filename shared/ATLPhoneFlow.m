@@ -249,3 +249,20 @@ NSDictionary *ATLPhoneFlow(NSString *base,NSString *action,NSInteger stage,ATLPh
   PFError(error,@"不支持的手机流程操作");return nil;
  }@finally{ATLRegClose(&store);}
 }
+
+// 2026-11-06 接码模块重构：Lua 侧 at.httpGet 取信+解析判新后，用本函数把验证码写进 Registration
+// 状态机（与 phoneFlow('mail') 成功路径完全同一条：wait_code → SetCode → code_ready）。
+NSDictionary *ATLPhoneFlowCommitCode(NSString *base,NSString *code,NSError **error){
+ if(error)*error=nil;
+ if(![code isKindOfClass:NSString.class] || ![code stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length){PFError(error,@"commit_code: 验证码为空");return nil;}
+ NSRegularExpression *format=[NSRegularExpression regularExpressionWithPattern:@"^(?:[0-9]{4}|[0-9]{6})$" options:0 error:nil];
+ if([format numberOfMatchesInString:code options:0 range:NSMakeRange(0,code.length)]!=1){PFError(error,@"commit_code: 验证码格式无效（须4或6位数字）");return nil;}
+ ATLRegStore store;if(!ATLRegAcquire(base,&store,error))return nil;
+ @try {
+  NSMutableDictionary *s=ATLRegLoad(&store,error);if(!s)return nil;
+  NSString *reg=[base stringByAppendingPathComponent:@"Registration"];
+  NSDictionary *job=ATLRegistrationStatus(reg,s[@"job"],error);if(!job)return nil;
+  if(![job[@"state"] isEqual:@"wait_code"]){PFError(error,@"当前任务不在等待邮箱验证码阶段，不能提交验证码");return nil;}
+  return ATLRegistrationSetCode(reg,s[@"job"],code,error)?@{@"state":@"code_ready"}:nil;
+ }@finally{ATLRegClose(&store);}
+}

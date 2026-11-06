@@ -1379,7 +1379,7 @@ for _=1,12 do
  local text={}
  for _,b in ipairs(blocks) do text[(b.text or ''):lower():gsub('^%s+',''):gsub('%s+$','')]=b end
  local function click(b) tap(b.x+b.width/2,b.y+b.height/2);msleep(600) end
- if text['phone number'] or text['verify your phone number'] then log('REG_SMS_REQUIRED');registrationStage('failed');return end
+ if text['phone number'] or text['verify your phone number'] then log('REG_SMS_REQUIRED');return end
  local deny=text["don't allow"] or text['don’t allow']
  if deny and (text['allow'] or text['“vinted” would like to send you notifications']) then
   click(deny)
@@ -1389,7 +1389,7 @@ for _=1,12 do
   tap(382,69);msleep(600)
  end
  local phone=findImage('US400_reg_phone_required_en.png',0.75,{x=0,y=330,width=414,height=220})
- if #phone==1 then log('REG_SMS_REQUIRED');registrationStage('failed');return end
+ if #phone==1 then log('REG_SMS_REQUIRED');return end
  if text['home'] and text['browse'] and text['sell'] and text['inbox'] and text['profile'] then stable=stable+1 else stable=0 end
  if stable>=2 then registrationStage('success');log('注册首页已确认');return end
  msleep(1000)
@@ -1618,6 +1618,9 @@ local stages={
    if passWelcomeSlider() then log('欢迎滑块已通过');return end
    error('SLIDER_FAILED')
   end
+  -- 2026-11-06 用户规则：注册后直接出现"Add a phone number"页=需要接短信码，
+  -- 不是失败：标注 sms_required 状态（phoneFlow('sms')）并直接领下一个账号。
+  if has(fillResult,'REG_SMS_REQUIRED') then phoneFlow('sms');log('需要接短信码，本轮完成并已保存');return end
   if passWelcomeSlider() then log('欢迎滑块已通过') end
  end},
  {'接码和注册后续页面',waitCode},

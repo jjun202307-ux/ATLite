@@ -1393,9 +1393,53 @@ static int l_failEmailJob(lua_State *L) {
     lua_pushboolean(L,ok); return 1;
 }
 
+// 2026-11-06 接码模块重构：Lua 侧 HTTP GET（应用层流量，走系统代理规则）。
+// 语义对齐原生 PFFetch：ephemeral、12s 超时、默认跟随重定向、2MB 上限、可停止。
+// 返回 body 字符串；失败返回 nil+错误说明。
+static int l_httpGet(lua_State *L) {
+    ATCheckScript(L);
+    NSString *urlString=[NSString stringWithUTF8String:luaL_checkstring(L,1)];
+    NSURLComponents *parts=[NSURLComponents componentsWithString:urlString];
+    if(![@[@"http",@"https"] containsObject:parts.scheme.lowercaseString]||!parts.host.length)return luaL_error(L,"httpGet: 不是有效HTTP/HTTPS地址");
+    __block NSString *body=nil;__block NSError *failure=nil;__block BOOL done=NO;
+    NSURLSessionConfiguration *config=NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    config.timeoutIntervalForRequest=12;config.timeoutIntervalForResource=12;config.URLCache=nil;
+    NSURLSession *session=[NSURLSession sessionWithConfiguration:config];
+    NSURLSessionDataTask *task=[session dataTaskWithURL:parts.URL completionHandler:^(NSData *data,NSURLResponse *response,NSError *error){
+        NSInteger status=[response isKindOfClass:NSHTTPURLResponse.class]?[(NSHTTPURLResponse *)response statusCode]:0;
+        if(error)failure=error;
+        else if(status!=200)failure=[NSError errorWithDomain:@"ATLite" code:status userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"HTTP %ld",(long)status]}];
+        else if(!data||data.length>2000000)failure=[NSError errorWithDomain:@"ATLite" code:413 userInfo:@{NSLocalizedDescriptionKey:@"响应为空或超过2MB"}];
+        else{body=[[NSString alloc]initWithData:data encoding:NSUTF8StringEncoding];
+            if(!body)failure=[NSError errorWithDomain:@"ATLite" code:500 userInfo:@{NSLocalizedDescriptionKey:@"响应不是有效UTF-8文本"}];}
+        done=YES;
+    }];
+    [task resume];
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:13];
+    while(!done&&deadline.timeIntervalSinceNow>0){
+        if(ATShouldStop()||ATScriptExpired())break;
+        [NSThread sleepForTimeInterval:0.05];
+    }
+    [session invalidateAndCancel];
+    if(!done&&deadline.timeIntervalSinceNow>0){lua_pushnil(L);lua_pushstring(L,"stopped");return 2;}
+    if(!done){lua_pushnil(L);lua_pushstring(L,"请求超时");return 2;}
+    if(failure){lua_pushnil(L);lua_pushstring(L,(failure.localizedDescription?:@"request failed").UTF8String);return 2;}
+    lua_pushstring(L,body.UTF8String);return 1;
+}
+
 static int l_phoneFlow(lua_State *L) {
     ATCheckScript(L);
     NSString *action=[NSString stringWithUTF8String:luaL_checkstring(L,1)];
+    // 2026-11-06 接码模块重构：Lua 判新后直接提交验证码（走 Registration 状态机）。
+    if([action isEqual:@"commit_code"]){
+        NSString *code=lua_isnoneornil(L,2)?nil:[NSString stringWithUTF8String:luaL_checkstring(L,2)];
+        NSError *commitError=nil;
+        NSDictionary *reply=ATLPhoneFlowCommitCode(ATBaseDir(),code,&commitError);
+        if(!reply)return luaL_error(L,"commit_code: %s",(commitError.localizedDescription?:@"operation failed").UTF8String);
+        lua_createtable(L,0,(int)reply.count);
+        for(NSString *key in reply){id value=reply[key];if([value isKindOfClass:NSString.class])lua_pushstring(L,[value UTF8String]);else if([value isKindOfClass:NSNumber.class])lua_pushinteger(L,[value longLongValue]);else continue;lua_setfield(L,-2,key.UTF8String);}
+        return 1;
+    }
     NSInteger stage=lua_isnoneornil(L,2)?0:(NSInteger)luaL_checkinteger(L,2);
     if(stage<0 || stage>32)return luaL_error(L,"invalid phone flow stage");
     NSError *error=nil;
@@ -1410,7 +1454,7 @@ static int l_phoneFlow(lua_State *L) {
 
 // MVP 未实现的 API：保留函数名，给出明确提示而非 nil 报错
 static int l_notImplemented(lua_State *L) {
-    luaL_traceback(L, L, "not implemented in ATLite v0.3.43 yet", 1);
+    luaL_traceback(L, L, "not implemented in ATLite v0.3.44 yet", 1);
     ATLog(@"[lua] API not implemented: %s", lua_tostring(L, -1));
     lua_pushnil(L);
     return 1;
@@ -1434,6 +1478,7 @@ static const luaL_Reg ATLuaFuncs[] = {
     {"energyMode", l_energyMode},
     {"withScreen", l_withScreen},
     {"phoneFlow", l_phoneFlow},
+    {"httpGet",   l_httpGet},
     {"touchDown", l_touchDown},
     {"touchMove", l_touchMove},
     {"touchUp",   l_touchUp},
