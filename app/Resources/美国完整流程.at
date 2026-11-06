@@ -1398,10 +1398,16 @@ error('验证码提交后结果不明确，请人工核对')
 
 end
 
+-- readFrame：energy-mode 捕获契约（tests/test_energy_mode.py）——存在 withScreen 时
+-- 由它包裹执行（截图帧环境），否则直接执行；返回值原样传递。
+local function readFrame(body)
+ if type(withScreen)=='function' then return withScreen(body) end
+ return body()
+end
 local function run(name)
  local output={};local realLog=log
  log=function(s) output[#output+1]=tostring(s);realLog(s) end
- local ok,result=pcall(parts[name]);log=realLog
+ local ok,result=pcall(function() return readFrame(parts[name]) end);log=realLog
  if not ok then error(result) end
  return table.concat(output,'\n')
 end
@@ -1554,13 +1560,15 @@ do
 end
 -- 连续运行（2026-11-05 用户规则）：单账号失败不停止。失败后经工作台标记失败后
 -- 自动领取下一个账号，一直跑到工作台没有可领取账号为止。
-local previousEmail=''
+-- 初始 nil 哨兵：邮箱为空的重复返回（管理器无新账号）也要能终结循环，
+-- 否则单账号完成后会在轮询底 msleep 上空转（tests/test_phone_flow.py 无 UI 副作用契约）。
+local previousEmail=nil
 local function runOneAccount()
 log('正在读取启动账号和最新状态；工作台模式请保持电脑管理器在线')
 local state=phoneFlow('begin')
 log('启动账号已确认，从保存的正确阶段继续')
 local email=state.email or ''
-if previousEmail~='' and email==previousEmail then log('没有新账号，结束循环');return 'ended' end
+if previousEmail~=nil and email==previousEmail then log('没有新账号，结束循环');return 'ended' end
 previousEmail=email
 if state.state=='blocked' then phoneFlow('blocked');log('服务端阻止本账号，已记录，进入下一个账号');return 'completed' end
 if state.state=='sms_pending' then phoneFlow('sms');log('已补写短信验证结果，本轮完成');return 'completed' end
@@ -1633,6 +1641,8 @@ while true do
  if not ok then
   local message=tostring(result)
   if message:find('工作台没有可领取的未处理账号',1,true) then log('工作台没有可领取的账号，结束循环');break end
+  -- 配置缺失是致命错误：换号重试无意义，直接上抛（tests/test_phone_flow.py 契约：missing config 必须原样冒出）。
+  if message:find('missing config',1,true) then error(message) end
   consecutiveFailures=consecutiveFailures+1
   log('本账号失败（连续第'..consecutiveFailures..'个）：'..message)
   -- 2026-11-05 修复：本地注册任务是一次性占用（getRegistrationJob 同进程二次领取即报错
@@ -1645,6 +1655,7 @@ while true do
   if result=='ended' then log('没有新账号，结束循环');break end
  end
  if consecutiveFailures>=MAX_CONSECUTIVE_FAILURES then error('连续'..MAX_CONSECUTIVE_FAILURES..'个账号失败，暂停等待人工检查（排除问题后可再次运行）') end
- log('等待15秒后处理下一个账号');msleep(15000)
+ -- 仅失败后才等待15秒再取下一个；成功则立即继续（无 UI 副作用契约，见 tests/test_phone_flow.py）
+ if consecutiveFailures>0 then log('等待15秒后处理下一个账号');msleep(15000) end
 end
 log('本次运行结束')
