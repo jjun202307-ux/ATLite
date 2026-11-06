@@ -1516,6 +1516,7 @@ local function waitCode()
  -- 2026-11-06 用户规则：人机验证不停不等人工——连续2轮确认后自动跑滑块（内部3次×15秒），
  -- 滑块通过则继续接码；仍过不去则 SLIDER_FAILED 记本账号失败领下一个（同填表阶段 HUMAN_VERIFY_SEEN 语义）。
  local humanRounds=0
+ local stateAdvanced=false
  for round=1,150 do
   dismissSystemDialogs()
   local page=run('observe')
@@ -1544,6 +1545,14 @@ local function waitCode()
   end
   local ok,mail=pcall(phoneFlow,'mail')
   if ok and mail.state=='code_ready' and has(page,'PAGE_EMAIL_CODE') then local result=run('verify');if has(result,'REG_SMS_REQUIRED') then phoneFlow('sms') end;return end
+  -- 2026-11-06 修复：fill 见到人机验证时走滑块分支返回，没记 verification_seen，
+  -- 任务停在 submitting，mail 动作拒取（"当前任务不在等待邮箱验证码阶段"），码在邮箱也永远取不到。
+  -- 已在验证码页而 mail 未就绪时，补记 verification_seen（submitting→wait_code），每账号仅试一次。
+  if not ok and not stateAdvanced and has(page,'PAGE_EMAIL_CODE') then
+   stateAdvanced=true
+   local oka=pcall(registrationStage,'verification_seen')
+   log('补记verification_seen：'..tostring(oka))
+  end
   msleep(2000)
  end
  error('CODE_WAIT_TIMEOUT_STOP')
