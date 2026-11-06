@@ -10,7 +10,15 @@ env:
 
 jobs:
   build:
-    runs-on: macos-14
+    # 2026-11-06: GitHub macOS arm64 托管池容量紧张, 单跑 macos-14 连续 5 次
+    # 排队 15 分钟拿不到 runner 被取消(注解: "not acquired by Runner ... after
+    # multiple attempts")。改三路矩阵: arm64 两版 + macos-13(Intel, 独立池),
+    # 谁先拿到 runner 谁构建。iOS 交叉编译产物与宿主架构无关, Intel 产物等价。
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-13]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -133,7 +141,7 @@ jobs:
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
-          name: atlite-deb
+          name: atlite-deb-${{ matrix.os }}
           path: |
             packages/*.deb
             packages/ATLBackupSelfTest
