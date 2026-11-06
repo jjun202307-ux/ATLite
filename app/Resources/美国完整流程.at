@@ -280,20 +280,36 @@ log('VINTED_DELETE_SENT_VERIFY_INSTALLATION_STATE')
 end
 parts['US_准备_小火箭开启']=function()
 -- 只读取 UI；开关操作由调度器通过 tap 发出。
+-- 2026-11-06 实证重写（iPhone11 414x896，中文界面）：
+-- 旧版单点取色(330,134)落在开关白色镂空区恒为0xFFFFFF，把"已连接"误判为关；
+-- 且 OCR 把"未连接"误读为"末连接"，原样匹配不到。ON 态状态行显示节点地址（如 proxy.simplyproxies.com:6890），无"连接"字样。
+-- 新逻辑：多点采样开关区蓝色像素判开（ON=2473bd 蓝红差153；OFF=灰 e9e9eb 差2；阈值60，>=4点判开）；
+-- 状态行(y 95..165)认"未连接/末连接/not connected"为关、"连接中/connecting"为连接中；蓝色优先，灰色无连接文案才判关。
 local titles=findText('Shadowrocket');local title=false
 for _,p in ipairs(titles or {}) do if p[2]<100 then title=true end end
 if not title then error('不在小火箭页面') end
-local c=getColor(330,134);if type(c)~='number' then error('小火箭开关无法读取') end
-local on=((c&255)-((c>>16)&255))>=25
-local lines=ocrText();if not lines or #lines==0 then error('小火箭状态无法读取') end
-local pending=false
-for _,b in ipairs(lines) do
- if b.y>=95 and b.y<=160 then
-  local raw=b.text or '';local t=raw:lower()
-  if t:find('connecting',1,true) or t:find('not connected',1,true) or raw:find('连接中',1,true) or raw:find('未连接',1,true) then pending=true end
+local blue=0
+for x=322,374,4 do
+ for y=118,150,4 do
+  local c=getColor(x,y)
+  if type(c)=='number' and ((c&255)-((c>>16)&255))>=60 then blue=blue+1 end
  end
 end
-if not on then log('SHADOW_OFF') elseif pending then log('SHADOW_CONNECTING') else log('SHADOW_ON') end
+local lines=ocrText();if not lines or #lines==0 then error('小火箭状态无法读取') end
+local offText=false;local connText=false
+for _,b in ipairs(lines) do
+ local y=b.y or 0
+ if y>=95 and y<=165 then
+  local raw=tostring(b.text or '');local t=raw:lower()
+  if t:find('not connected',1,true) or raw:find('未连接',1,true) or raw:find('末连接',1,true) then offText=true end
+  if t:find('connecting',1,true) or raw:find('连接中',1,true) then connText=true end
+ end
+end
+if blue>=4 then
+ if connText then log('SHADOW_CONNECTING') else log('SHADOW_ON') end
+else
+ if connText then log('SHADOW_CONNECTING') else log('SHADOW_OFF') end
+end
 
 end
 parts['US_准备_注册页前置']=function()
@@ -367,13 +383,33 @@ end
 error('后台清理后未确认返回主屏')
 end
 parts['proxy_off']=function()
-local h=findText('Not Connected')
-if not h or #h~=1 then
- local c=getColor(330,134)
- if not c or ((c&255)-((c>>16)&255))<25 then error('小火箭状态不明确') end
- tap(350,134);msleep(1200)
- h=findText('Not Connected');if not h or #h~=1 then error('小火箭未关闭') end
+local function offSeen()
+ for _,b in ipairs(ocrText()) do
+  local y=b.y or 0
+  if y>=95 and y<=165 then
+   local t=tostring(b.text or '')
+   if t:find('未连接',1,true) or t:find('末连接',1,true) or t:lower():find('not connected',1,true) then return true end
+  end
+ end
+ return false
 end
+local function blueCount()
+ local n=0
+ for x=322,374,4 do
+  for y=118,150,4 do
+   local c=getColor(x,y)
+   if type(c)=='number' and ((c&255)-((c>>16)&255))>=60 then n=n+1 end
+  end
+ end
+ return n
+end
+if offSeen() then return end
+if blueCount()>=4 then
+ tap(350,134);msleep(1500)
+ if offSeen() then return end
+ error('小火箭未关闭')
+end
+error('小火箭状态不明确')
 end
 parts['open_form']=function()
 msleep(1000)
@@ -1465,30 +1501,46 @@ local function openForm()
  run('open_form')
 end
 local function waitCode()
- -- 0.3.35起不固定轮数上限：按页面和邮件持续观察，直到得到结果、实际操作出错或用户点停止。
+ -- 等码上限见下方 for round=1,150（5分钟）：超时判本账号失败换号。
  -- 恢复本阶段时屏幕可能停在ATLite等前台，先把Vinted拉回前台再观察，避免对错误页面空转。
  dismissSystemDialogs()
  local ok,err=pcall(openApp,'Vinted','vinted')
  if ok then log('已切回Vinted，开始观察接码页面') else log('未能自动切回Vinted（'..tostring(err)..'），按当前屏幕观察') end
- while true do
+ -- 2026-11-05 用户规则：等验证码最多5分钟（150轮×2秒），超时判本账号失败换下一个，禁止无限卡死任务。
+ -- 2026-11-06 用户规则：人机验证不停不等人工——连续2轮确认后自动跑滑块（内部3次×15秒），
+ -- 滑块通过则继续接码；仍过不去则 SLIDER_FAILED 记本账号失败领下一个（同填表阶段 HUMAN_VERIFY_SEEN 语义）。
+ local humanRounds=0
+ for round=1,150 do
   dismissSystemDialogs()
   local page=run('observe')
   if has(page,'PAGE_ACCOUNT_BLOCKED') then error('ACCOUNT_BLOCKED_RESULT') end
   if has(page,'PAGE_BLOCKED') then error('SERVER_BLOCKED_STOP') end
   if has(page,'PAGE_PHONE_VERIFICATION') then phoneFlow('sms');return end
-  if has(page,'PAGE_HUMAN_VERIFICATION') then log('请手动完成人机验证，脚本会继续观察') end
+  if has(page,'PAGE_HUMAN_VERIFICATION') then
+   humanRounds=humanRounds+1
+   if humanRounds>=2 then
+    log('检测到人机验证，尝试自动过滑块')
+    if passWelcomeSlider() and not has(run('observe'),'PAGE_HUMAN_VERIFICATION') then
+     log('滑块已通过，继续接码')
+     humanRounds=0
+    else
+     error('SLIDER_FAILED')
+    end
+   end
+  else humanRounds=0 end
   if has(page,'PAGE_UNKNOWN') then
    local sample={}
    for _,b in ipairs(ocrText()) do local t=(b.text or ''):gsub('%s+',' ');if #t>0 then sample[#sample+1]=t end end
    local diag='UNKNOWN_PAGE_DIAG screen='..screenWidth()..'x'..screenHeight()..' colors='..getColor(207,222)..','..getColor(207,470)..','..getColor(207,800)..' ocr='..table.concat(sample,' | ')
    log(diag:sub(1,500))
-   log('未知页面，保存诊断后暂停，保留当前断点')
-   error('UNKNOWN_PAGE_PAUSE')
+   log('未知页面，本账号失败换下一个')
+   error('UNKNOWN_PAGE_STOP')
   end
   local ok,mail=pcall(phoneFlow,'mail')
   if ok and mail.state=='code_ready' and has(page,'PAGE_EMAIL_CODE') then local result=run('verify');if has(result,'REG_SMS_REQUIRED') then phoneFlow('sms') end;return end
   msleep(2000)
  end
+ error('CODE_WAIT_TIMEOUT_STOP')
 end
 -- 2026-11-05 实证：screenWidth/screenHeight 走 SpringBoard 主队列分发，主线程忙时
 -- 1.5s 超时返回 0，单次判死会在 11:14 那样误杀整个脚本（PHONE_SIZE_MISMATCH 假阳性）。重试 10 次。
@@ -1563,7 +1615,7 @@ for index=state.next+1,#stages do
   local message=tostring(problem)
   if has(message,'SERVER_BLOCKED_STOP') then phoneFlow('blocked');log('服务端阻止本账号，已记录，进入下一个账号');return 'completed' end
   if has(message,'SMS_REQUIRED') then phoneFlow('sms');log('需要接短信码，本轮完成并已保存');return 'completed' end
-  if index>=13 or has(message,'_STOP') or has(message,'_PAUSE') then error(message) end
+  if index>=13 or has(message,'_STOP') then error(message) end
   phoneFlow('stage_failed',index-1)
   if attempt>=3 then error(message) end
   log('当前步骤15秒后重试：'..item[1]);msleep(15000)
@@ -1571,9 +1623,9 @@ for index=state.next+1,#stages do
 end
 phoneFlow('finish');log('手机完整流程完成，结果已保存到results.txt');return 'completed'
 end
--- 外层保护：单账号错误默认标记失败并进入下一个；_PAUSE 例外——它是"等人工"信号
--- （仅 UNKNOWN_PAGE_PAUSE：接码阶段页面无法识别，账号保留、脚本停住）。
--- 注意：滑块3次不过不是 _PAUSE，而是 SLIDER_FAILED → 正常记失败领下一个账号（脚本规则）。
+-- 外层保护：单账号错误统一标记失败并进入下一个，全程全自动、不停不等人工
+-- （2026-11-06 用户规则：删除全部 _PAUSE 人工暂停；未知页面=本账号失败换下一个）。
+-- 注意：滑块3次不过是 SLIDER_FAILED → 正常记失败领下一个账号（脚本规则）。
 local MAX_CONSECUTIVE_FAILURES=10
 local consecutiveFailures=0
 while true do
@@ -1581,9 +1633,12 @@ while true do
  if not ok then
   local message=tostring(result)
   if message:find('工作台没有可领取的未处理账号',1,true) then log('工作台没有可领取的账号，结束循环');break end
-  if message:find('_PAUSE',1,true) then log('需要人工处理，脚本暂停（账号已保留）：'..message);break end
   consecutiveFailures=consecutiveFailures+1
   log('本账号失败（连续第'..consecutiveFailures..'个）：'..message)
+  -- 2026-11-05 修复：本地注册任务是一次性占用（getRegistrationJob 同进程二次领取即报错
+  -- "already claimed"）。工作台模式下失败的账号不走 verification_seen/success 分支，
+  -- 占用不释放会杀死下一个账号的填表。这里统一释放（无占用时 pcall 静默失败）。
+  local okr=pcall(registrationStage,'failed');if okr then log('已释放本地注册任务占用') end
   if message:find('ACCOUNT_BLOCKED_RESULT',1,true) then local okb=pcall(phoneFlow,'blocked');if okb then log('已向工作台上报封号') end end
  else
   consecutiveFailures=0
