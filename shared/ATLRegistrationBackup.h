@@ -44,7 +44,7 @@ static BOOL ATLFeedbackSave(ATLRegStore *out,NSDictionary *entry){
 }
 static BOOL ATLBackupExport(NSString *directory,NSDictionary *job){
  NSString *state=job[@"state"];
- NSDictionary *labels=@{@"pending":@"待手机处理",@"preparing":@"注册中",@"ready":@"注册中",@"submitting":@"注册中",@"code_ready":@"注册中",@"entering_code":@"注册中",@"review":@"待核对",@"error":@"失败",@"cancelled":@"已取消",@"done":@"完成",@"wait_code":@"等待验证码"};
+ NSDictionary *labels=@{@"pending":@"待手机处理",@"preparing":@"注册中",@"ready":@"注册中",@"submitting":@"注册中",@"code_ready":@"注册中",@"entering_code":@"注册中",@"review":@"待核对",@"error":@"失败",@"cancelled":@"已取消",@"done":@"完成",@"wait_code":@"等待验证码",@"blocked":@"封号"};
  NSString *label=[state isEqual:@"sms_required"]?@"需要接短信码":labels[state];if(!label)return YES;
  BOOL usernameKnown=job[@"usernameFilled"]?[job[@"usernameFilled"] boolValue]:![@[@"pending",@"preparing"] containsObject:state];
  if([state isEqual:@"preparing"] && !usernameKnown)label=@"待手机处理";
