@@ -160,7 +160,9 @@ def main(root):
     check("R19-E19 CI set -x 诊断", "set -ux" in wf or "set -x" in wf)
     check("R19-E19 CI 存在性断言", "test -f" in wf)
     check("R20-E20 CI 断言现代 libroot", 'test -f "$THEOS/lib/iphone/roothide/libroot.a"' in wf)
-    check("ABI 使用 macOS Xcode 工具链", "runs-on: macos-15" in wf and "xcrun --sdk iphoneos clang --version" in wf
+    # runs-on 自 5f5e452 起改为矩阵 macos-14/15/13, 不再有字面量 "runs-on: macos-15"。
+    # 检测"用了 macOS 系 runner"(矩阵 macos-N 或 runs-on: macos-*) 且未退化为 Linux clang11。
+    check("ABI 使用 macOS Xcode 工具链", "macos-" in wf and "xcrun --sdk iphoneos clang --version" in wf
           and "iOSToolchain-x86_64.tar.xz" not in wf)
     check("ABI 链接不放过未定义符号", "undefined,dynamic_lookup" not in read(root, "tweak/Makefile"))
 
