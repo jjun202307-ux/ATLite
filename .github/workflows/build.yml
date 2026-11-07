@@ -38,8 +38,8 @@ jobs:
 
       # iOS14+ SpringBoard injection needs the versioned arm64e ABI.
       # Use Apple's Xcode compiler/linker, not the legacy Linux clang11 toolchain.
-      # 网络抖动会导致 clone/install-sdk 瞬时失败(11-05 实证: Setup Theos 30 秒内失败)。
-      # 拆分两步 + 重试, 让日志能区分"clone 挂"还是"sdk 挂"。
+      # 网络抖动会导致 theos clone(recursive 含子模块) 瞬时失败(11-05 实证)。
+      # 拆分重试, 让日志能区分"clone 挂"还是后续"SDK/工具链挂"。
       - name: Clone Theos
         run: |
           set -eux
@@ -55,23 +55,24 @@ jobs:
             test "$i" = 3 && exit 1
           done
 
-      # install-sdk latest 走 api.github.com, 共享运行器 IP 常被限流(11-05 实证连续失败)。
-      # 固定版本直链下载 releases/download 资源, 不经过 API。
+      # G2 根因: 之前固定下载 iPhoneOS16.5.sdk, 产出旧 arm64e ABI 二进制,
+      # 缺 __objc_stubs/__auth_ptr, iOS 15+ dyld 不加载(本地 clang-11 同因)。
+      # theos/sdks 仓库无 18.x; 官方 0.3.44 的 sdk=18.5 来自 Xcode 自带 SDK。
+      # 用 THEOS_PLATFORM_SDK_ROOT 让 theos 自动发现 Xcode 自带 iphoneos SDK
+      # (darwin_head.mk: _XCODE_SDK_DIR = THEOS_PLATFORM_SDK_ROOT/Platforms/iPhoneOS.platform/Developer/SDKs),
+      # 新版 clang + arm64e 新 ABI + SDK 18.x 自动对齐, 且无需下载(绕开限流)。
       - name: Setup Theos SDK
         run: |
           set -eux
-          SDK_URL="https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
-          mkdir -p "$THEOS/sdks"
-          for i in 1 2 3; do
-            if curl -fL --connect-timeout 15 --retry 3 -o /tmp/sdk.tar.xz "$SDK_URL"; then
-              break
-            fi
-            echo "sdk download attempt $i failed, retrying in 20s"
-            sleep 20
-            test "$i" = 3 && exit 1
-          done
-          tar -xJf /tmp/sdk.tar.xz -C "$THEOS/sdks"
-          ls "$THEOS/sdks"
+          xcrun --sdk iphoneos clang --version
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "Xcode iphoneos SDK: $SDK_PATH"
+          # SDK_PATH 形如 .../Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.5.sdk
+          # 反推 Developer 目录作为 THEOS_PLATFORM_SDK_ROOT
+          THEOS_PLATFORM_SDK_ROOT="$(echo "$SDK_PATH" | sed 's#/Platforms/.*##')"
+          echo "THEOS_PLATFORM_SDK_ROOT: $THEOS_PLATFORM_SDK_ROOT"
+          echo "THEOS_PLATFORM_SDK_ROOT=$THEOS_PLATFORM_SDK_ROOT" >> "$GITHUB_ENV"
+          ls "$THEOS_PLATFORM_SDK_ROOT/Platforms/iPhoneOS.platform/Developer/SDKs/"
 
       # Theos 官方无 roothide scheme 模块(vendor/mod 仅有 rootless, 其 deb.mk 强制
       # THEOS_PACKAGE_ARCH := iphoneos-arm64, 不匹配 roothide 设备的 iphoneos-arm64e)。

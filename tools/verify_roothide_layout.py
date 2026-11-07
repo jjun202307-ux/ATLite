@@ -34,37 +34,98 @@ def http_get(url):
         return r.read()
 
 
+XZ_MAGIC = b"\xfd7zXZ\x00"
+GZIP_MAGIC = b"\x1f\x8b"
+BZIP2_MAGIC = b"BZh"
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"          # zstd 真正的 magic（旧版误写成 LZMA_ALONE 头）
+
+
 def parse_ar(path_or_bytes):
-    """解析 deb 的 ar 归档，返回 {成员名: bytes}"""
-    data = path_or_bytes if isinstance(path_or_bytes, bytes) else open(path_or_bytes, "rb").read()
-    assert data[:8] == b"!<arch>\n", "不是 ar 归档"
+    """解析 deb 的 ar 归档，返回 {成员名: bytes}。
+
+    2026-11-07：加边界校验并改抛 ValueError。原来用 assert + 无校验切片，
+    畸形输入会 AssertionError / 静默截断，让门禁「自洽式假绿灯」。
+    """
+    if isinstance(path_or_bytes, bytes):
+        data = path_or_bytes
+    else:
+        with open(path_or_bytes, "rb") as fh:
+            data = fh.read()
+    if data[:8] != b"!<arch>\n":
+        raise ValueError("不是 ar 归档")
     out, off = {}, 8
     while off + 60 <= len(data):
         hdr = data[off:off + 60]
-        name = hdr[0:16].decode().strip().rstrip("/")
-        size = int(hdr[48:58].decode().strip())
+        if hdr[58:60] != b"`\n":
+            raise ValueError("ar 成员头损坏 @%d" % off)
+        name = hdr[0:16].decode("ascii", "replace").strip().rstrip("/")
+        try:
+            size = int(hdr[48:58].decode("ascii", "replace").strip())
+        except ValueError:
+            raise ValueError("ar 成员长度非法 @%d (%s)" % (off, name))
+        if size < 0 or off + 60 + size > len(data):
+            raise ValueError("ar 成员越界 @%d (%s)" % (off, name))
         out[name] = data[off + 60:off + 60 + size]
         off += 60 + size + (size & 1)
+    if off < len(data):
+        raise ValueError("ar 归档尾部有 %d 字节残缺数据" % (len(data) - off))
     return out
 
 
-def decompress(raw):
-    if raw[:6] == b"\xfd7zXZ\x00":
-        return lzma.decompress(raw)
-    for fmt in (lzma.FORMAT_XZ, lzma.FORMAT_ALONE):
+def is_tar(data):
+    """未压缩 tar 的 ustar magic 位于偏移 257。"""
+    return len(data) >= 512 and data[257:262] == b"ustar"
+
+
+def unpack_member(raw):
+    """按 magic 精确识别 deb 的 control.tar / data.tar 压缩格式。
+
+    这是 verify_artifact.py、verify_roothide_layout.py、package_roothide.py
+    的唯一解压入口（2026-11-07 技能复查要求消除三套不一致实现）：
+      .xz    -> XZ          .gz  -> gzip
+      .bz2   -> bzip2       .lzma / 无后缀但 LZMA_ALONE 头 -> FORMAT_ALONE
+      无后缀 -> 必须是未压缩 tar
+    zstd 无依赖，明确报错而不是被误判成 LZMA。
+    """
+    if raw[:6] == XZ_MAGIC:
         try:
-            return lzma.decompress(raw, format=fmt)
-        except Exception:
-            pass
-    if raw[:2] == b"\x1f\x8b":
+            return lzma.decompress(raw, format=lzma.FORMAT_XZ)
+        except lzma.LZMAError as exc:
+            raise ValueError("XZ 成员损坏: %s" % exc)
+    if raw[:2] == GZIP_MAGIC:
         import gzip
-        return gzip.decompress(raw)
-    if raw[:3] == b"BZh":
+        import zlib
+        try:
+            return gzip.decompress(raw)
+        except (OSError, EOFError, zlib.error) as exc:
+            raise ValueError("gzip 成员损坏: %s" % exc)
+    if raw[:4] == ZSTD_MAGIC:
+        raise ValueError("zstd 压缩需要 zstandard 依赖，无法核验")
+    # 纯 tar 必须先于 BZIP2 判定：合法 tar 的首文件名可能恰好以 "BZh" 开头，
+    # 若按 magic 优先会把纯 tar 误当 bzip2（复查 N1）。
+    if is_tar(raw):
+        return raw
+    if raw[:3] == BZIP2_MAGIC:
         import bz2
-        return bz2.decompress(raw)
-    if raw[:5] == b"\x5d\x00\x00\x80\x00":  # zstd magic
-        raise SystemExit("需要 zstd 解压（pip install zstandard）")
-    return raw
+        try:
+            return bz2.decompress(raw)
+        except (OSError, EOFError, ValueError) as exc:
+            raise ValueError("bzip2 成员损坏: %s" % exc)
+    # 只剩 LZMA_ALONE：1B props + 4B dict + 8B uncompressed size。
+    # 必须解出合法 tar 才接受，杜绝旧版「FORMAT_ALONE 盲试解出空流」的假成功。
+    if len(raw) >= 13:
+        try:
+            out = lzma.decompress(raw, format=lzma.FORMAT_ALONE)
+        except lzma.LZMAError:
+            out = b""
+        if is_tar(out):
+            return out
+    raise ValueError("无法识别的 tar 成员压缩格式（magic=%r）" % raw[:8])
+
+
+def decompress(raw):
+    """向后兼容别名；新代码请直接用 unpack_member()。"""
+    return unpack_member(raw)
 
 
 def get_member(members, prefix):

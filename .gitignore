@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 energy-static.log
 energy-tests.log
+
+# theos 构建中间产物与打包输出（本地构建坏包不入库，CI 产物走 artifacts）
+.theos/
+packages/
+*.deb
