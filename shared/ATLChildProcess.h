@@ -36,7 +36,7 @@ static inline int ATLChildDup(int fd) { return fcntl(fd, F_DUPFD_CLOEXEC, 3); }
 // The caller retains inputFD; only this routine's duplicates are closed here.
 static inline ATLChildResult ATLRunChild(const char *exe, const char *requestID,
         int inputFD, char *output, size_t limit, double timeout,
-        int (*cancelled)(void *), void *context, BOOL energy) {
+        int (*cancelled)(void *), void *context, int energy) {
     ATLChildResult r; memset(&r, 0, sizeof(r)); r.exitCode = -1;
     int input = -1, readFD = -1, writeFD = -1, raw[2] = {-1,-1};
     pid_t pid = 0; int childStatus = 0, eof = 0;

@@ -31,18 +31,18 @@ int main(int argc,char **argv) {
  }
  char path[]="/tmp/atl-child-XXXXXX";int fd=mkstemp(path);assert(fd>=0);unlink(path);assert(write(fd,"input",5)==5);
  char out[256];lseek(fd,0,SEEK_SET);
- ATLChildResult r=ATLRunChild(argv[0],"ok",fd,out,sizeof(out)-1,1,NULL,NULL);
+ ATLChildResult r=ATLRunChild(argv[0],"ok",fd,out,sizeof(out)-1,1,NULL,NULL,0);
  assert(r.status==ATL_CHILD_OK && r.reaped && r.exitCode==0 && r.length==6 && !memcmp(out,"output",6));
- r=ATLRunChild("/missing/ATLWorker","ok",fd,out,sizeof(out)-1,1,NULL,NULL);assert(r.status==ATL_CHILD_SPAWN_FAILED && !r.spawned);
- r=ATLRunChild(argv[0],"exit",fd,out,sizeof(out)-1,1,NULL,NULL);assert(r.status==ATL_CHILD_EXIT_FAILED && r.exitCode==7 && r.reaped);
- r=ATLRunChild(argv[0],"signal",fd,out,sizeof(out)-1,1,NULL,NULL);assert(r.status==ATL_CHILD_SIGNALED && r.signal==SIGTERM && r.reaped);
- double before=ATLChildNow();r=ATLRunChild(argv[0],"hang",fd,out,sizeof(out)-1,.15,NULL,NULL);assert(r.status==ATL_CHILD_TIMEOUT && r.reaped && ATLChildNow()-before<1);
- cancelAt=ATLChildNow()+.05;r=ATLRunChild(argv[0],"cancel",fd,out,sizeof(out)-1,1,cancelled,NULL);assert(r.status==ATL_CHILD_CANCELLED && r.reaped);
- r=ATLRunChild(argv[0],"large",fd,out,sizeof(out)-1,1,NULL,NULL);assert(r.status==ATL_CHILD_OUTPUT_LIMIT && r.reaped && r.length<=sizeof(out)-1);
- forceReadError=1;r=ATLRunChild(argv[0],"hang",fd,out,sizeof(out)-1,1,NULL,NULL);forceReadError=0;
+ r=ATLRunChild("/missing/ATLWorker","ok",fd,out,sizeof(out)-1,1,NULL,NULL,0);assert(r.status==ATL_CHILD_SPAWN_FAILED && !r.spawned);
+ r=ATLRunChild(argv[0],"exit",fd,out,sizeof(out)-1,1,NULL,NULL,0);assert(r.status==ATL_CHILD_EXIT_FAILED && r.exitCode==7 && r.reaped);
+ r=ATLRunChild(argv[0],"signal",fd,out,sizeof(out)-1,1,NULL,NULL,0);assert(r.status==ATL_CHILD_SIGNALED && r.signal==SIGTERM && r.reaped);
+ double before=ATLChildNow();r=ATLRunChild(argv[0],"hang",fd,out,sizeof(out)-1,.15,NULL,NULL,0);assert(r.status==ATL_CHILD_TIMEOUT && r.reaped && ATLChildNow()-before<1);
+ cancelAt=ATLChildNow()+.05;r=ATLRunChild(argv[0],"cancel",fd,out,sizeof(out)-1,1,cancelled,NULL,0);assert(r.status==ATL_CHILD_CANCELLED && r.reaped);
+ r=ATLRunChild(argv[0],"large",fd,out,sizeof(out)-1,1,NULL,NULL,0);assert(r.status==ATL_CHILD_OUTPUT_LIMIT && r.reaped && r.length<=sizeof(out)-1);
+ forceReadError=1;r=ATLRunChild(argv[0],"hang",fd,out,sizeof(out)-1,1,NULL,NULL,0);forceReadError=0;
  assert(r.status==ATL_CHILD_IO_ERROR && r.systemError==EIO && r.reaped);
  int savedIn=dup(0),savedOut=dup(1);close(0);close(1);lseek(fd,0,SEEK_SET);
- r=ATLRunChild(argv[0],"ok",fd,out,sizeof(out)-1,1,NULL,NULL);
+ r=ATLRunChild(argv[0],"ok",fd,out,sizeof(out)-1,1,NULL,NULL,0);
  dup2(savedIn,0);dup2(savedOut,1);close(savedIn);close(savedOut);
  assert(r.status==ATL_CHILD_OK && r.reaped && r.length==6);
  close(fd);return 0;

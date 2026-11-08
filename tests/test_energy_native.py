@@ -43,7 +43,7 @@ static int invalidate(lua_State *L) {(void)L;ATEnergyInvalidate();return 0;}
 static int stop(lua_State *L) {(void)L;stopped=1;return 0;}
 int main(void) { @autoreleasepool {
     NSString *dir=[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
-    assert(ATLEnergyEnabled(dir));NSError *error=nil;
+    assert(!ATLEnergyEnabled(dir));NSError *error=nil;
     assert(ATLSaveEnergyEnabled(dir,NO,&error));assert(!ATLEnergyEnabled(dir));
     assert(ATLSaveEnergyEnabled(dir,YES,&error));assert(ATLEnergyEnabled(dir));
     [@"broken" writeToFile:[dir stringByAppendingPathComponent:@"energy-mode.plist"] atomically:YES encoding:NSUTF8StringEncoding error:nil];

@@ -1,12 +1,16 @@
 import pathlib
 import re
 import unittest
-from lupa.lua53 import LuaRuntime
+try:
+    from lupa.lua53 import LuaRuntime
+except ImportError:
+    LuaRuntime = None
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class EnergyModeTests(unittest.TestCase):
+    @unittest.skipUnless(LuaRuntime, 'install lupa for Lua workflow execution')
     def test_script_uses_optional_scope_and_keeps_old_runner_compatible(self):
         script = (ROOT / 'app/Resources/美国完整流程.at').read_text(encoding='utf-8')
         lua = LuaRuntime()
