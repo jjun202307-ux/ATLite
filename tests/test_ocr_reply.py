@@ -26,7 +26,7 @@ int main(void) { @autoreleasepool {
  reply[@"ok"]=@NO;reply[@"errorMessage"]=@"model unavailable";
  NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate") && [error isEqual:@"model unavailable"],@"worker failure never becomes empty success");
  NSCAssert(!ATLDecodeOCRReply([NSData dataWithBytes:"bad" length:3],@"test",828,1792,2,&result,&error,@"accurate"),@"invalid JSON");
- reply=[@{@"version":@1,@"requestId":@"test",@"ok":@YES,@"mode":@"fast",@"languages":@[@"en-US"],@"lines":@[@{@"text":@"Hello",@"x":@.1,@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}]} mutableCopy];
+ [reply setDictionary:@{@"version":@1,@"requestId":@"test",@"ok":@YES,@"mode":@"fast",@"languages":@[@"en-US"],@"lines":@[@{@"text":@"Hello",@"x":@.1,@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}]}];
  NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"fast") && result.count==1,@"energy fast mode accepted");
  NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate"),@"fast reply rejected by accurate expectation");
  reply[@"mode"]=@"accurate";reply[@"languages"]=@[@"zh-Hans",@"en-US"];
