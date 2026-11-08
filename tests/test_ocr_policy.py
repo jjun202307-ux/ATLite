@@ -11,7 +11,7 @@ class OCRPolicy(unittest.TestCase):
   d=plistlib.loads((ROOT/'ocr/entitlements.plist').read_bytes())
   self.assertIn('H11ANEInDirectPathClient',d['com.apple.security.iokit-user-client-class'])
   s=(ROOT/'ocr/main.m').read_text(encoding='utf-8')
-  self.assertIn('VNRequestTextRecognitionLevelAccurate',s)
+  self.assertIn('VNRequestTextRecognitionLevelFast',s)
   self.assertNotIn('usesCPUOnly=YES',s)
   self.assertIn('supportedRecognitionLanguagesAndReturnError:',s)
   self.assertIn('getppid()',s)

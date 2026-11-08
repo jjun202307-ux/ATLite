@@ -23,7 +23,7 @@ static inline BOOL ATLDecodeOCRReply(NSData *data, NSString *requestID,
         id reason=reply[@"errorMessage"];
         return ATLOCRReplyError(error,[reason isKindOfClass:NSString.class] && [reason length]<=1024 ? reason : @"OCR worker failed");
     }
-    if (![reply[@"mode"] isEqual:@"accurate"] || ![reply[@"languages"] isEqual:(@[@"zh-Hans",@"en-US"])])
+    if (![reply[@"mode"] isEqual:@"fast"] || ![reply[@"languages"] isEqual:(@[@"en-US"])])
         return ATLOCRReplyError(error,@"OCR recognition capability mismatch");
     id lines=reply[@"lines"];
     if (![lines isKindOfClass:NSArray.class] || [lines count]>ATL_OCR_LINE_LIMIT)

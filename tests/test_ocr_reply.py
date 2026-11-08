@@ -7,12 +7,12 @@ class OCRReply(unittest.TestCase):
   code=r'''#import <Foundation/Foundation.h>
 #import "ATLOCRReply.h"
 int main(void) { @autoreleasepool {
- NSDictionary *line=@{@"text":@"用户名：测试用户",@"x":@.1,@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9};
- NSMutableDictionary *reply=[@{@"version":@1,@"requestId":@"test",@"ok":@YES,@"mode":@"accurate",@"languages":@[@"zh-Hans",@"en-US"],@"lines":@[line]} mutableCopy];
+ NSDictionary *line=@{@"text":@"Username: TestUser",@"x":@.1,@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9};
+ NSMutableDictionary *reply=[@{@"version":@1,@"requestId":@"test",@"ok":@YES,@"mode":@"fast",@"languages":@[@"en-US"],@"lines":@[line]} mutableCopy];
  ATTextResult result={0};NSString *error=nil;
  NSData *(^encode)(void)=^{return [NSJSONSerialization dataWithJSONObject:reply options:0 error:nil];};
  NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"valid reply");
- NSCAssert(result.count==1 && fabs(result.lines[0].x-41.4)<.001 && !strcmp(result.lines[0].text,"用户名：测试用户"),@"point conversion and UTF8");
+ NSCAssert(result.count==1 && fabs(result.lines[0].x-41.4)<.001 && !strcmp(result.lines[0].text,"Username: TestUser"),@"point conversion and UTF8");
  reply[@"lines"]=@[@{@"text":@"fixture",@"x":@(-0.0004650982105789553),@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}];
  NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error) && result.lines[0].x==0,@"clip one-pixel Vision edge overshoot");
  reply[@"lines"]=@[@{@"text":@"fixture",@"x":@(-2.0/828.0),@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}];

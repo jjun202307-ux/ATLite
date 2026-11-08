@@ -27,7 +27,7 @@ static int ATLReply(NSString *requestID, BOOL ok, NSArray *lines,
     NSMutableDictionary *reply=[@{@"version":@ATL_OCR_PROTOCOL_VERSION,
         @"requestId":requestID ?: @"invalid",@"ok":@(ok)} mutableCopy];
     if (ok) {
-        reply[@"mode"]=@"accurate";reply[@"languages"]=@[@"zh-Hans",@"en-US"];
+        reply[@"mode"]=@"fast";reply[@"languages"]=@[@"en-US"];
         reply[@"lines"]=lines ?: @[];
     } else { reply[@"errorCode"]=code ?: @"VISION_FAILED";reply[@"errorMessage"]=message ?: @"OCR failed"; }
     NSData *data=[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil];
@@ -87,8 +87,8 @@ int main(int argc,char **argv) {
             image=CGImageSourceCreateImageAtIndex(source,0,NULL);
             if (!image) return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Image decode failed");
             VNRecognizeTextRequest *request=[[VNRecognizeTextRequest alloc] init];
-            request.recognitionLevel=VNRequestTextRecognitionLevelAccurate;
-            request.recognitionLanguages=@[@"zh-Hans",@"en-US"];
+            request.recognitionLevel=VNRequestTextRecognitionLevelFast;
+            request.recognitionLanguages=@[@"en-US"];
             request.usesLanguageCorrection=NO;
             // Default accelerated request; CPU-only failed on the actual device.
             request.usesCPUOnly=NO;
@@ -100,8 +100,8 @@ int main(int argc,char **argv) {
                 supported=[VNRecognizeTextRequest supportedRecognitionLanguagesForTextRecognitionLevel:request.recognitionLevel
                     revision:request.revision error:&error];
             }
-            if (!supported || ![supported containsObject:@"zh-Hans"] || ![supported containsObject:@"en-US"])
-                return ATLReply(requestID,NO,nil,@"LANGUAGE_UNSUPPORTED",error.localizedDescription ?: @"Accurate Chinese/English unavailable");
+            if (!supported || ![supported containsObject:@"en-US"])
+                return ATLReply(requestID,NO,nil,@"LANGUAGE_UNSUPPORTED",error.localizedDescription ?: @"Fast English unavailable");
             VNImageRequestHandler *handler=[[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
             if (![handler performRequests:@[request] error:&error])
                 return ATLReply(requestID,NO,nil,@"VISION_FAILED",error.localizedDescription);
