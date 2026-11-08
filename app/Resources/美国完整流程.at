@@ -1,5 +1,7 @@
 -- 纯手机入口：无需电脑、USB或SSH。由generate_phone_flow.py生成。
 local parts={}
+-- 2026-11-07：当前账号邮箱，供「第三次AMG」读IP日志按账号精确归因。
+local currentEmail=''
 parts['US_准备_AMG_定位']=function()
 -- 仅识别 AMG 菜单；不触发“原始机器”或“一键新机”。
 if screenWidth()~=414 or screenHeight()~=896 then error('屏幕尺寸与模板不匹配') end
@@ -64,6 +66,24 @@ for i=1,25 do
 end
 if not result then result=AMG_BUSY_SEEN and 'AMG_WAIT_MORE_BUSY' or 'AMG_WAIT_MORE' end
 log(result)
+
+end
+parts['US_准备_AMG读IP']=function()
+-- AMG 完成后读页面底部红色 IP（注册IP记录，2026-11-06 计划书）。
+-- 只扫底部区域文本块（y>=720，逻辑点），正则四段数字且每段<=255 才采纳。
+-- 读不到静默返回，不影响任何现有流程（pcall 由调用方包裹）。
+local ip=nil
+for _,b in ipairs(ocrText()) do
+    local t=(b.text or ''):gsub('%s','')
+    local a,c,d,e=t:match('(%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)')
+    if a and tonumber(a)<=255 and tonumber(c)<=255 and tonumber(d)<=255 and tonumber(e)<=255 then
+        local cy=b.y+(b.height or 0)/2
+        if cy>=720 then ip=a..'.'..c..'.'..d..'.'..e;break end
+    end
+end
+-- 带上当前账号邮箱，管理器按邮箱精确归因；手机只在「第三次AMG」调用本模块。
+-- 独立运行本模块时 currentEmail 为 nil，EMAIL= 为空，管理器会安全跳过（不错写账号）。
+if ip then log('AMG_IP='..ip..' EMAIL='..tostring(currentEmail or '')) end
 
 end
 parts['US_准备_AppStore下载_开发中']=function()
@@ -338,6 +358,75 @@ for _,value in pairs(fields) do if not value then ready=false end end
 if ready then log('VINTED_FORM_READY') elseif present then log('VINTED_PAGE_PRESENT') else log('VINTED_PAGE_UNKNOWN') end
 
 end
+parts['US_准备_节点轮转']=function()
+-- 节点轮转：识图点击为主、OCR 兜底（2026-11-07，见 节点轮转识图点击改造计划书）。
+-- 由主脚本「关闭小火箭」阶段直接调用 parts['US_准备_节点轮转']()，不经 run()/withScreen：
+-- withScreen 会缓存一帧（gEnergyFrame/gEnergyOCR），tap 后 OCR 会读到旧画面，验证必然失败。
+-- 失败一律 error 上抛：外层 3 次重试后本账号失败换号，全程自动、不停不等人。
+local getter=nil
+if type(at)=='table' and type(at.httpGet)=='function' then getter=at.httpGet
+elseif type(httpGet)=='function' then getter=httpGet end
+-- 管理器尚未升级 / 局域网不通时直接跳过：不启用节点轮转的账号必须照常跑，
+-- 绝不能因为辅助功能不可用就烧账号。只有「已启用但找不到节点/点不中」才 error 换号。
+if not getter then log('NODE_API_SKIP no httpGet');return end
+local body,err=getter('http://192.168.2.100:8766/node.json')
+if not body or not body:find('"enabled"',1,true) then log('NODE_API_SKIP '..tostring(err));return end
+local enabled=body:find('"enabled"%s*:%s*true')~=nil
+local node=body:match('"node"%s*:%s*"([^"]*)"')
+if not enabled or not node or node=='' then log('NODE_SKIP');return end
+local region={x=0,y=310,width=414,height=500}
+local hit=nil
+-- 识图为主：模板由管理器按本轮节点复制成 Images/US_NODE_TARGET.png；pcall 防 2s 预算击穿。
+local okImg,hits=pcall(findImage,'US_NODE_TARGET.png',0.80,region)
+if okImg and type(hits)=='table' and #hits>=1 then hit=hits[1];log('NODE_IMAGE_HIT') end
+if not hit then
+  -- OCR 兜底：按工作台配置的节点名找文字，只取列表区域内的命中。
+  local okTxt,txt=pcall(findText,node)
+  if okTxt and type(txt)=='table' then
+    for _,p in ipairs(txt) do
+      if type(p)=='table' and p[2] and p[2]>310 and p[2]<810 then hit=p;break end
+    end
+  end
+  if hit then log('NODE_OCR_HIT') end
+end
+if not hit then error('NODE_NOT_FOUND '..node) end
+tap(hit[1],hit[2]);msleep(900)
+-- 验证（最多 3 次轮询，任一通过即可）：
+-- ① 识图：左侧「选中橙点」模板命中且落在目标行附近（像素级，最可靠；
+--    真机实测顶部 OCR 会把 "111" 读错，不能只靠文字）。
+-- ② OCR 兜底：顶部大卡片当前节点名（物理 y 250-284 → 逻辑 y<200），
+--    规范化 1/l/I 与空格后再比对。
+local function normalized(s)
+  local t=tostring(s or ''):lower()
+  t=t:gsub('[%s|]','')
+  t=t:gsub('[il]','1')
+  return t
+end
+local verified=false
+for i=1,3 do
+  local okDot,dots=pcall(findImage,'US_NODE_SELECTED_DOT.png',0.75,{x=0,y=300,width=100,height=520})
+  if okDot and type(dots)=='table' and #dots>=1 and type(dots[1])=='table' then
+    local dy=(dots[1][2] or 0)-hit[2]
+    if dy>-25 and dy<25 then verified=true;log('NODE_DOT_VERIFIED') end
+  end
+  if not verified then
+    local okOCR,blocks=pcall(ocrText)
+    if okOCR and type(blocks)=='table' then
+      local want=normalized(node)
+      for _,b in ipairs(blocks) do
+        if type(b)=='table' and (b.y or 0)<200 and normalized(b.text):find(want,1,true) then
+          verified=true;log('NODE_OCR_VERIFIED');break
+        end
+      end
+    end
+  end
+  if verified then break end
+  msleep(700)
+end
+if not verified then error('NODE_SWITCH_UNVERIFIED '..node) end
+log('NODE_SWITCHED='..node)
+
+end
 parts['US_准备_页面只读检查']=function()
 -- 准备阶段页面识别：只读取画面，不点击、不更改手机数据。
 log('US_PREPARATION_READONLY_BEGIN')
@@ -419,8 +508,11 @@ for _=1,3 do
  local dlg=findText('wireless data');local allow=findText('WLAN & Cellular')
  if dlg and #dlg>0 and allow and #allow==1 then tap(allow[1][1],allow[1][2]);msleep(2000) else break end
 end
+-- 2026-11-06 用户规则：找"Sign up for Vinted"注册按钮的等待轮数 12→24 翻倍
+-- （名义睡眠 12×0.7≈8.4s → 16.8s；含每轮 OCR 墙钟约 25s → 50-60s），
+-- Vinted 冷启动慢的机型不再误报"美国版注册入口未找到"。
 local entry=nil
-for i=1,12 do
+for i=1,24 do
  local blocked=findText('session has been blocked');if blocked and #blocked>0 then log('VINTED_SESSION_BLOCKED');error('SERVER_BLOCKED_STOP') end
  local dlg2=findText('WLAN & Cellular')
  if dlg2 and #dlg2==1 and (not findText('Sign up for Vinted') or #findText('Sign up for Vinted')~=1) then tap(dlg2[1][1],dlg2[1][2]);msleep(2000) end
@@ -443,13 +535,19 @@ log('OPEN_FORM_OK new='..tostring(not labels['full name']))
 end
 parts['observe']=function()
 -- 只观察页面，不触摸人机验证控件。
-local human,blocked,accountBlocked,phone,field,verify,email=false,false,false,false,false,false,false
+-- 2026-11-06 用户裁定：识图模板为主、OCR 子串兜底（封号页此前漏判成失败）。
+local accountBlocked=false
+pcall(function()
+ if #findImage('US400_account_blocked_title.png',0.75,{x=0,y=300,width=414,height=140})>0 then accountBlocked=true end
+end)
+local human,blocked,phone,field,verify,email=false,false,false,false,false,false
 for _,b in ipairs(ocrText()) do
  local text=(b.text or ''):lower()
  local norm=text:gsub('[%s%p]','')
  if text:find('human',1,true) and text:find('verify',1,true) then human=true end
  if text:find('session has been blocked',1,true) then blocked=true end
  -- 2026-11-05 实证：注册提交后可能直接出现账号级封禁页（Your account is blocked ... terms of use）
+ -- OCR 兜底：模板未命中时靠这两组子串（与 generate_phone_flow.py 内联检查同口径）
  if text:find('account is blocked',1,true) or text:find('blocked your account',1,true) then accountBlocked=true end
  if text:find('phone number',1,true) then phone=true end
  if norm=='verify' then verify=true end
@@ -1374,12 +1472,33 @@ tap(field.x+field.width/2,field.y+field.height/2);msleep(800);inputRegistrationC
 local button=exact('verify');if not button then error('验证按钮未确认') end
 tap(button.x+button.width/2,button.y+button.height/2);msleep(2000)
 local stable=0
-for _=1,12 do
+-- 2026-11-06 12→25 轮：提交后跳手机号页偶发超过 12 秒，12 轮超时把 sms_required 账号误记失败
+for _=1,25 do
  local blocks=lines()
  local text={}
  for _,b in ipairs(blocks) do text[(b.text or ''):lower():gsub('^%s+',''):gsub('%s+$','')]=b end
  local function click(b) tap(b.x+b.width/2,b.y+b.height/2);msleep(600) end
- if text['phone number'] or text['verify your phone number'] then log('REG_SMS_REQUIRED');return end
+ -- 主：模板识图（用户给的页面特征图）；OCR 子串兜底。
+-- 2026-11-06 pcall 包裹：模板搜索超 2s 预算时不再整段炸掉，交给 OCR 兜底。
+local okimg,phone=pcall(findImage,'US400_reg_phone_required_en.png',0.75,{x=0,y=330,width=414,height=220})
+if okimg and type(phone)=='table' and #phone==1 then log('REG_SMS_REQUIRED');return end
+-- OCR 兜底：精确键匹配曾漏 "Add a phone number" 整句（账号已达 sms_required 却被记失败），用子串扫描
+do
+ local sms=false
+ for _,b in ipairs(blocks) do local t=(b.text or ''):lower();if t:find('phone number',1,true) then sms=true break end end
+ if sms then log('REG_SMS_REQUIRED');return end
+end
+-- 2026-11-06 用户裁定：封号页（Your account is blocked）模板为主、OCR 子串兜底，命中走封号链路不计失败
+do
+ local blockedHit=false
+ pcall(function()
+  if #findImage('US400_account_blocked_title.png',0.75,{x=0,y=300,width=414,height=140})>0 then blockedHit=true end
+ end)
+ if not blockedHit then
+  for _,b in ipairs(blocks) do local t=(b.text or ''):lower();if t:find('account is blocked',1,true) or t:find('blocked your account',1,true) then blockedHit=true break end end
+ end
+ if blockedHit then log('PAGE_ACCOUNT_BLOCKED');error('ACCOUNT_BLOCKED_RESULT') end
+end
  local deny=text["don't allow"] or text['don’t allow']
  if deny and (text['allow'] or text['“vinted” would like to send you notifications']) then
   click(deny)
@@ -1388,9 +1507,8 @@ for _=1,12 do
  elseif text['what you earn is'] and text['list now'] then
   tap(382,69);msleep(600)
  end
- local phone=findImage('US400_reg_phone_required_en.png',0.75,{x=0,y=330,width=414,height=220})
- if #phone==1 then log('REG_SMS_REQUIRED');return end
- if text['home'] and text['browse'] and text['sell'] and text['inbox'] and text['profile'] then stable=stable+1 else stable=0 end
+-- 2026-11-06 删除 US400_reg_phone_required_en 模板检测：与上方 OCR 判断重复，且模板搜索反复超 2s 预算把每个账号卡死在 verify 段（连续4账号实证）。
+if text['home'] and text['browse'] and text['sell'] and text['inbox'] and text['profile'] then stable=stable+1 else stable=0 end
  if stable>=2 then registrationStage('success');log('注册首页已确认');return end
  msleep(1000)
 end
@@ -1506,7 +1624,216 @@ local function openForm()
  end
  run('open_form')
 end
-local function waitCode()
+-- 接码模块（2026-11-06 重构版 v2，纯 Lua，移植自电脑版 eagle_vinted.air/icloud_code.py 实证方案）
+-- 链路：at.httpGet 取信 → 提取 iframe srcdoc 邮件正文 → 可见文本 → 语境取码 → 基线判新
+--       → phoneFlow('commit_code') 提交（原生 Registration 状态机）→ 原生输入。
+-- 设计要点（与电脑版一致）：
+--  1. 邮件正文在 iframe srcdoc（实体转义），先取 srcdoc 再剥标签，外层 CSS 颜色（#172033 等）不干扰；
+--  2. 可见文本排除 script/style/noscript/head，块级标签换行；
+--  3. 取码：语境后 100 非数字字符内的边界完整 4/6 位数字；失败再试"独立成行"版式；唯一候选才收；
+--  4. 基线：首轮正文文本整体作基线（等效电脑版 sha256 指纹），新邮件=正文不同；
+--  5. 每轮日志区分：无新邮件 / 新邮件未识别 / 网络错误可重试，不再黑盒。
+
+local M={}
+
+-- HTML 实体解码
+local function decodeEntities(s)
+  if not s then return '' end
+  local map={['&lt;']='<',['&gt;']='>',['&quot;']='"',['&#39;']="'",['&#160;']=' ',['&nbsp;']=' ',['&amp;']='&'}
+  for a,b in pairs(map) do s=s:gsub(a,b) end
+  return s
+end
+
+-- 提取 WDMail iframe srcdoc 中的完整邮件正文（实体转义，无双引号冲突）
+local function extractSrcdocHtml(page)
+  local i=page:find('<iframe',1,true)
+  while i do
+    local tagEnd=page:find('>',i+8)
+    if not tagEnd then break end
+    local open=page:sub(i,tagEnd)
+    local q,content=open:match("srcdoc%s*=%s*(['\"])(.-)%1")
+    if content and #content>0 then return decodeEntities(content) end
+    i=page:find('<iframe',tagEnd+1,true)
+  end
+  return nil
+end
+
+-- 可见文本：排除 script/style/noscript/head，块级标签转换行，剥其余标签，逐行压缩空白
+local function visibleText(html)
+  local s=html
+  s=s:gsub('<(script%f[^%w])[^>]*>.-</script>',' ')
+  s=s:gsub('<(style%f[^%w])[^>]*>.-</style>',' ')
+  s=s:gsub('<(noscript%f[^%w])[^>]*>.-</noscript>',' ')
+  s=s:gsub('<head[^>]*>.-</head>',' ')
+  s=s:gsub('<%s*(/?)%s*(%a+)[^>]*>',function(slash,tag)
+    if tag=='p' or tag=='div' or tag=='br' or tag=='tr' or tag=='td' or tag=='h1' or tag=='h2' or tag=='li' or tag=='article' or tag=='section' then return '\n' end
+    return ' '
+  end)
+  s=s:gsub('<[^>]*>',' ')
+  s=decodeEntities(s)
+  local lines={}
+  for raw in (s..'\n'):gmatch('(.-)\n') do
+    local line=raw:gsub('%s+',' '):gsub('^%s+',''):gsub('%s+$','')
+    if #line>0 then lines[#lines+1]=line end
+  end
+  return table.concat(lines,'\n')
+end
+
+-- 邮件正文文本：优先 srcdoc，否则整页（防接口改版兜底）
+local function emailText(page)
+  local srcdoc=extractSrcdocHtml(page)
+  local body=srcdoc or page
+  local text=visibleText(body)
+  -- 去掉接口包装层前缀（"邮件内容："之前的接收时间/主题）
+  local a=text:find('邮件内容%s*[:：]')
+  if a then text=text:sub(a) end
+  return text
+end
+
+-- 语境词表（中/英/法，与电脑版一致）
+local cues={'验证码','验证代码','校验码',
+  'verification code','security code','confirmation code','code below','your code',
+  'code de vérification','code de verification','code de confirmation',
+  'code de sécurité','code de securité','code ci%-dessous','votre code'}
+
+-- 边界完整的 4/6 位数字校验
+local function boundaryOk(text,s1,e1)
+  local before=text:sub(s1-1,s1-1)
+  local after=text:sub(e1+1,e1+1)
+  local after2=text:sub(e1+2,e1+2)
+  if before:match('[%w_]') then return false end
+  if after:match('[%w_]') then return false end
+  if (after=='-' or after=='/' or after==':') and after2:match('[0-9]') then return false end
+  return true
+end
+
+-- 取码：主匹配（语境后 100 字符内）→ 独立成行兜底 → 唯一候选才返回
+-- 返回 code|nil, detail('primary'|'line'|'none'|'ambiguous')
+function M.extractCode(text)
+  if type(text)~='string' or #text==0 then return nil,'none' end
+  local lower=text:lower()
+  local hasCue=false
+  for _,cue in ipairs(cues) do
+    if lower:find(cue,1,false) then hasCue=true break end
+  end
+  -- 无语境词不直接放弃：独立成行版式仍是强信号（纯文本邮件无 cue 词时靠它）
+  local found={}
+  -- 主匹配：逐语境位置，取其后 100 字符内第一个边界完整 4/6 位数字
+  for _,cue in ipairs(cues) do
+    local start=1
+    while true do
+      local a,b=lower:find(cue,start)
+      if not a then break end
+      local window=text:sub(b+1,b+101)
+      for s1,e1,digits in window:gmatch('()()(%d%d%d%d%d?%d?)') do
+        if (#digits==4 or #digits==6) and boundaryOk(window,s1,e1) then
+          found[digits]=true
+        end
+        break -- 每语境实例只取其后第一个数字
+      end
+      start=b+1
+    end
+  end
+  local list={}
+  for code in pairs(found) do list[#list+1]=code end
+  if #list==1 then return list[1],'primary' end
+  if #list>1 then return nil,'ambiguous' end
+  -- 兜底：独立成行版式（CSS 颜色、URL、日期不会独立成行）
+  found={}
+  for line in (text..'\n'):gmatch('(.-)\n') do
+    local code=line:match('^%s*([0-9][0-9][0-9][0-9][0-9]?[0-9]?)%s*$')
+    if code and (#code==4 or #code==6) then found[code]=true end
+  end
+  list={}
+  for code in pairs(found) do list[#list+1]=code end
+  if #list==1 then return list[1],'line' end
+  if #list>1 then return nil,'ambiguous' end
+  return nil,'none'
+end
+
+-- 判新：滤掉基线码后唯一非基线候选即收（比电脑版增强：旧码在邮箱里也能收新码）
+function M.decideCode(text,baselineCodes)
+  if type(text)~='string' or #text==0 then return nil,'empty' end
+  local lower=text:lower()
+  local found={}
+  for _,cue in ipairs(cues) do
+    local start=1
+    while true do
+      local a,b=lower:find(cue,start)
+      if not a then break end
+      local window=text:sub(b+1,b+101)
+      for s1,e1,digits in window:gmatch('()()(%d%d%d%d%d?%d?)') do
+        if (#digits==4 or #digits==6) and boundaryOk(window,s1,e1) then found[digits]=true end
+        break
+      end
+      start=b+1
+    end
+  end
+  if not next(found) then
+    for raw in (text..'\n'):gmatch('(.-)\n') do
+      local code=raw:match('^%s*([0-9][0-9][0-9][0-9][0-9]?[0-9]?)%s*$')
+      if code and (#code==4 or #code==6) then found[code]=true end
+    end
+  end
+  local fresh={}
+  for code in pairs(found) do
+    if not baselineCodes[code] then fresh[#fresh+1]=code end
+  end
+  if #fresh==1 then return fresh[1],'ok' end
+  if #fresh==0 then return nil,'baseline' end
+  table.sort(fresh)
+  return nil,'ambiguous:'..table.concat(fresh,',')
+end
+
+function M.mask(code)
+  if type(code)~='string' or #code<2 then return tostring(code) end
+  return code:sub(1,2)..'****'
+end
+
+function M.init(url)
+  if type(url)~='string' or not url:find('^https?://') or not url:find('e=',1,true) then
+    return nil,'取信链接不是有效HTTP/HTTPS地址或缺少 e= 邮箱参数'
+  end
+  return {url=url,baselineText=nil,baselineCodes=nil,rounds=0}
+end
+
+-- 取信（每轮日志：字节；沙箱无 os/time，耗时不计——原生 httpGet 自带 12s 超时）
+function M.fetch(state)
+  state.rounds=state.rounds+1
+  local body,err=at.httpGet(state.url)
+  if not body then
+    log(string.format('接码 第%d轮 fetch失败 %s',state.rounds,tostring(err)))
+    return nil,tostring(err)
+  end
+  log(string.format('接码 第%d轮 fetch ok bytes=%d',state.rounds,#body))
+  return body
+end
+
+-- 单轮：取信→正文→判新。
+-- 返回 'new',code | 'same' | 'unparsed' | nil,err
+function M.poll(state)
+  local body,err=M.fetch(state)
+  if not body then return nil,err end
+  local text=emailText(body)
+  if state.baselineText==nil then
+    state.baselineText=text
+    state.baselineCodes={}
+    local code,detail=M.extractCode(text)
+    if code then state.baselineCodes[code]=true end
+    log(string.format('接码 基线已建 正文=%d字节 基线码=%s',#text,code and M.mask(code) or '无'))
+    return 'same'
+  end
+  if text==state.baselineText then return 'same' end
+  local code,detail=M.decideCode(text,state.baselineCodes)
+  if code then
+    log(string.format('接码 第%d轮 新邮件判新成功 %s(%s)',state.rounds,M.mask(code),detail))
+    return 'new',code
+  end
+  log(string.format('接码 第%d轮 新邮件但未识别唯一新码 %s',state.rounds,tostring(detail)))
+  return 'unparsed'
+end
+local mailState=nil -- 接码模块状态表（模块表=M，状态表=mailState，两者绝不混用）
+local function waitCode(email)
  -- 等码上限见下方 for round=1,150（5分钟）：超时判本账号失败换号。
  -- 恢复本阶段时屏幕可能停在ATLite等前台，先把Vinted拉回前台再观察，避免对错误页面空转。
  dismissSystemDialogs()
@@ -1515,6 +1842,17 @@ local function waitCode()
  -- 2026-11-05 用户规则：等验证码最多5分钟（150轮×2秒），超时判本账号失败换下一个，禁止无限卡死任务。
  -- 2026-11-06 用户规则：人机验证不停不等人工——连续2轮确认后自动跑滑块（内部3次×15秒），
  -- 滑块通过则继续接码；仍过不去则 SLIDER_FAILED 记本账号失败领下一个（同填表阶段 HUMAN_VERIFY_SEEN 语义）。
+ -- 2026-11-06 接码重构：取信+解析+判新全在 Lua 模块（M.init/M.poll，每轮日志），
+ -- 判新成功→phoneFlow('commit_code',码)写入原生状态机→verify 原生输入提交（替代旧 phoneFlow('mail') 黑盒，全程可查）。
+ -- 基线原则：正常路径在 prepare_account 阶段（提交前）已建；恢复路径这里首轮现建。
+ -- 恢复路径风险：若验证码在基线建立前已到邮箱，会被判基线码滤掉直至超时（与旧原生基线快照语义一致，已记录）。
+ local url='https://api.wdmail.top/m?f=html&e='..tostring(email or '')
+ -- mailState.url 比对：多账号连续运行时状态残留指向上一邮箱时必须重建（模块表 M 永不被重指向）
+ if type(mailState)~='table' or mailState.url~=url then
+  mailState,err=M.init(url)
+  if not mailState then log('接码模块初始化失败：'..tostring(err));error('MAIL_INIT_FAILED_STOP') end
+  M.poll(mailState)
+ end
  local humanRounds=0
  local stateAdvanced=false
  for round=1,150 do
@@ -1543,15 +1881,24 @@ local function waitCode()
    log('未知页面，本账号失败换下一个')
    error('UNKNOWN_PAGE_STOP')
   end
-  local ok,mail=pcall(phoneFlow,'mail')
-  if ok and mail.state=='code_ready' and has(page,'PAGE_EMAIL_CODE') then local result=run('verify');if has(result,'REG_SMS_REQUIRED') then phoneFlow('sms') end;return end
+  -- 新接码模块轮询：fetch+判新，状态分 new/same/unparsed/nil+err，日志在模块内（fetch 字节/基线/判定）
+  local mailStatus,mailCode=M.poll(mailState)
+  if mailStatus=='new' then
+   log('接码判新成功，写入原生状态机 code='..M.mask(mailCode))
+   local okc,errc=pcall(phoneFlow,'commit_code',mailCode)
+   if not okc then log('commit_code失败：'..tostring(errc)) end
+   if okc and has(page,'PAGE_EMAIL_CODE') then local result=run('verify');if has(result,'REG_SMS_REQUIRED') then phoneFlow('sms') end;return end
+  end
   -- 2026-11-06 修复：fill 见到人机验证时走滑块分支返回，没记 verification_seen，
-  -- 任务停在 submitting，mail 动作拒取（"当前任务不在等待邮箱验证码阶段"），码在邮箱也永远取不到。
-  -- 已在验证码页而 mail 未就绪时，补记 verification_seen（submitting→wait_code），每账号仅试一次。
-  if not ok and not stateAdvanced and has(page,'PAGE_EMAIL_CODE') then
-   stateAdvanced=true
-   local oka=pcall(registrationStage,'verification_seen')
-   log('补记verification_seen：'..tostring(oka))
+  -- 任务停在 submitting，commit_code 会拒（要求 wait_code），码在邮箱也永远取不到。
+  -- 已在验证码页而任务未进 wait_code/code_ready 时，补记 verification_seen（submitting→wait_code），每账号仅试一次。
+  if not stateAdvanced and has(page,'PAGE_EMAIL_CODE') then
+   local pfOk,pfState=pcall(phoneFlow,'status')
+   if pfOk and pfState.state~='wait_code' and pfState.state~='code_ready' then
+    stateAdvanced=true
+    local oka=pcall(registrationStage,'verification_seen')
+    log('补记verification_seen：'..tostring(oka))
+   end
   end
   msleep(2000)
  end
@@ -1577,6 +1924,7 @@ log('正在读取启动账号和最新状态；工作台模式请保持电脑管
 local state=phoneFlow('begin')
 log('启动账号已确认，从保存的正确阶段继续')
 local email=state.email or ''
+currentEmail=email
 if previousEmail~=nil and email==previousEmail then log('没有新账号，结束循环');return 'ended' end
 previousEmail=email
 if state.state=='blocked' then phoneFlow('blocked');log('服务端阻止本账号，已记录，进入下一个账号');return 'completed' end
@@ -1594,7 +1942,7 @@ end
 local stages={
  {'卸载Vinted',function() if installed() then run('US_准备_卸载Vinted');if installed() then error('UNINSTALL_FAILED') end end end},
  {'第一次Safari清理',safari},
- {'关闭小火箭',function() openApp('Shadowrocket','shadowrocket');run('proxy_off') end},
+ {'关闭小火箭',function() openApp('Shadowrocket','shadowrocket');run('proxy_off');parts['US_准备_节点轮转']() end},
  {'第一次AMG',amg},
  {'关闭后台',function() run('close_apps') end},
  {'安装Vinted',function()
@@ -1607,9 +1955,20 @@ local stages={
  {'第二次AMG',amg},
  {'第二次Safari清理',safari},
  {'开启小火箭',proxyOn},
- {'第三次AMG',amg},
+ -- 注册前最后一次 AMG：只有这一次读页面底部 IP，日志带账号邮箱。
+ {'第三次AMG',function() amg();pcall(run,'US_准备_AMG读IP') end},
  {'打开注册页',openForm},
- {'领取本机账号和读取旧邮件基线',function() phoneFlow('prepare_account') end},
+ {'领取本机账号和读取旧邮件基线',function()
+  phoneFlow('prepare_account')
+  -- 2026-11-06 接码模块基线快照（提交前）：防止验证码先于基线到达邮箱被当旧码滤掉死等。
+  -- 初始化失败=配置缺失，missing config 致命上抛（外层契约：换号重试无意义）。
+  local url='https://api.wdmail.top/m?f=html&e='..tostring(email or '')
+  -- 注意：模块表是 M，状态表是 mailState，绝不把 M 重指向状态（否则 M.init/M.poll 被冲掉）
+  local ms,merr=M.init(url)
+  if not ms then log('接码模块初始化失败：'..tostring(merr));error('missing config: 接码取信链接初始化失败 '..tostring(merr)) end
+  mailState=ms
+  M.poll(mailState)
+ end},
  {'填写并单次提交',function()
   local fillResult=run('fill')
   -- 点 Continue 后见到 human/verify：给欢迎滑块机会（3次、每次15秒，见 US_滑块.at）。
@@ -1623,7 +1982,7 @@ local stages={
   if has(fillResult,'REG_SMS_REQUIRED') then phoneFlow('sms');log('需要接短信码，本轮完成并已保存');return end
   if passWelcomeSlider() then log('欢迎滑块已通过') end
  end},
- {'接码和注册后续页面',waitCode},
+ {'接码和注册后续页面',function() waitCode(email) end},
 }
 for index=state.next+1,#stages do
  local item=stages[index]
