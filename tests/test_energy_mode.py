@@ -31,12 +31,12 @@ class EnergyModeTests(unittest.TestCase):
         self.assertIn('gEnergyEnabled=ATLEnergyEnabled(ATBaseDir());', source)
         self.assertIn('gEnergyTemplates=nil;', source)
 
-    def test_energy_ocr_fast_and_downsample_are_gated_by_energy(self):
+    def test_energy_ocr_fast_is_gated_by_energy_and_no_downsample(self):
         source = (ROOT / 'tweak/Tweak.xm').read_text(encoding='utf-8')
-        # A 方案：降采样函数存在，且只在节能模式调用
-        self.assertIn('ATDownsampleBitmapHalf', source)
-        self.assertIn('if (gEnergyEnabled && gEnergyDepth)', source)
-        self.assertIn('ATDownsampleBitmapHalf(&bitmap,&small)', source)
+        # A 方案已移除：降采样会破坏主屏小图标文字识别（Shadowrocket→Shadowro¢ket），
+        # OCR 输入保持全分辨率 bitmap，不再有降采样分支。
+        self.assertNotIn('ATDownsampleBitmapHalf', source)
+        self.assertIn('ATCreateCGImageFromBitmap(&bitmap)', source)
         # B 方案：spawn 传 --energy 与校验传 fast 都由 gEnergyEnabled 决定
         self.assertIn('gEnergyEnabled?@"fast":@"accurate"', source)
         worker = (ROOT / 'ocr/main.m').read_text(encoding='utf-8')
