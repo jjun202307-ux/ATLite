@@ -36,7 +36,13 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos clang --version
           git clone --recursive --depth=1 https://github.com/theos/theos.git "$THEOS"
-          "$THEOS/bin/install-sdk" latest
+          # 不再用 install-sdk latest 下载 SDK（走 api.github.com 易限流/返回错误内容，
+          # 2026-11-08 两次构建均因 iPhoneOS16.5.sdk download failed 失败）。
+          # 改用 macOS runner 上 Xcode 自带的 iphoneos SDK，通过软链让 theos 识别，
+          # 产出 arm64e 新 ABI 二进制，与官方 0.3.44 一致。
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          mkdir -p "$THEOS/sdks"
+          ln -sfn "$SDK_PATH" "$THEOS/sdks/iPhoneOS.sdk"
           ls "$THEOS/sdks"
 
       # Theos 官方无 roothide scheme 模块(vendor/mod 仅有 rootless, 其 deb.mk 强制
