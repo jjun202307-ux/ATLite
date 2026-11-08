@@ -23,11 +23,12 @@
 @end
 
 static int ATLReply(NSString *requestID, BOOL ok, NSArray *lines,
-                    NSString *code, NSString *message) {
+                    NSString *code, NSString *message, BOOL energy) {
     NSMutableDictionary *reply=[@{@"version":@ATL_OCR_PROTOCOL_VERSION,
         @"requestId":requestID ?: @"invalid",@"ok":@(ok)} mutableCopy];
     if (ok) {
-        reply[@"mode"]=@"accurate";reply[@"languages"]=@[@"zh-Hans",@"en-US"];
+        reply[@"mode"]=energy ? @"fast" : @"accurate";
+        reply[@"languages"]=energy ? @[@"en-US"] : @[@"zh-Hans",@"en-US"];
         reply[@"lines"]=lines ?: @[];
     } else { reply[@"errorCode"]=code ?: @"VISION_FAILED";reply[@"errorMessage"]=message ?: @"OCR failed"; }
     NSData *data=[NSJSONSerialization dataWithJSONObject:reply options:0 error:nil];
@@ -48,7 +49,11 @@ static double ATLWorkerNow(void) {
 
 int main(int argc,char **argv) {
     @autoreleasepool {
-        if (argc!=5 || strcmp(argv[1],"--request-id") || strcmp(argv[3],"--parent")) return 64;
+        // 参数：--request-id <id> --parent <pid> [--energy]；--energy 为可选节能标志。
+        BOOL energy=NO;
+        for (int i=1;i<argc;i++) if (!strcmp(argv[i],"--energy")) energy=YES;
+        int baseArgc = energy ? 6 : 5;
+        if (argc!=baseArgc || strcmp(argv[1],"--request-id") || strcmp(argv[3],"--parent")) return 64;
         NSString *requestID=[NSString stringWithUTF8String:argv[2]];
         if (!requestID.length || requestID.length>80) return 64;
         char *end=NULL;errno=0;long owner=strtol(argv[4],&end,10);
@@ -69,13 +74,13 @@ int main(int argc,char **argv) {
         @try {
             struct stat st;
             if (fstat(STDIN_FILENO,&st) || !S_ISREG(st.st_mode) || st.st_size<=0 || st.st_size>ATL_OCR_INPUT_LIMIT)
-                return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Expected bounded regular PNG input");
+                return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Expected bounded regular PNG input",energy);
             NSMutableData *input=[NSMutableData dataWithLength:(NSUInteger)st.st_size];
             NSUInteger offset=0;
             while (offset<input.length) {
                 ssize_t n=read(STDIN_FILENO,(char *)input.mutableBytes+offset,input.length-offset);
                 if (n<0 && errno==EINTR) continue;
-                if (n<=0) return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Incomplete image input");
+                if (n<=0) return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Incomplete image input",energy);
                 offset+=(NSUInteger)n;
             }
             source=CGImageSourceCreateWithData((__bridge CFDataRef)input,NULL);
@@ -83,12 +88,12 @@ int main(int argc,char **argv) {
             unsigned long long w=[properties[(__bridge NSString *)kCGImagePropertyPixelWidth] unsignedLongLongValue];
             unsigned long long h=[properties[(__bridge NSString *)kCGImagePropertyPixelHeight] unsignedLongLongValue];
             if (!w || !h || w>8192 || h>8192 || w*h>ATL_OCR_PIXEL_LIMIT)
-                return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Invalid or excessive image dimensions");
+                return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Invalid or excessive image dimensions",energy);
             image=CGImageSourceCreateImageAtIndex(source,0,NULL);
-            if (!image) return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Image decode failed");
+            if (!image) return ATLReply(requestID,NO,nil,@"INPUT_INVALID",@"Image decode failed",energy);
             VNRecognizeTextRequest *request=[[VNRecognizeTextRequest alloc] init];
-            request.recognitionLevel=VNRequestTextRecognitionLevelAccurate;
-            request.recognitionLanguages=@[@"zh-Hans",@"en-US"];
+            request.recognitionLevel=energy ? VNRequestTextRecognitionLevelFast : VNRequestTextRecognitionLevelAccurate;
+            request.recognitionLanguages=energy ? @[@"en-US"] : @[@"zh-Hans",@"en-US"];
             request.usesLanguageCorrection=NO;
             // Default accelerated request; CPU-only failed on the actual device.
             request.usesCPUOnly=NO;
@@ -100,11 +105,11 @@ int main(int argc,char **argv) {
                 supported=[VNRecognizeTextRequest supportedRecognitionLanguagesForTextRecognitionLevel:request.recognitionLevel
                     revision:request.revision error:&error];
             }
-            if (!supported || ![supported containsObject:@"zh-Hans"] || ![supported containsObject:@"en-US"])
-                return ATLReply(requestID,NO,nil,@"LANGUAGE_UNSUPPORTED",error.localizedDescription ?: @"Accurate Chinese/English unavailable");
+            if (!supported || (energy ? ![supported containsObject:@"en-US"] : (![supported containsObject:@"zh-Hans"] || ![supported containsObject:@"en-US"])))
+                return ATLReply(requestID,NO,nil,@"LANGUAGE_UNSUPPORTED",error.localizedDescription ?: (energy ? @"Fast English unavailable" : @"Accurate Chinese/English unavailable"),energy);
             VNImageRequestHandler *handler=[[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
             if (![handler performRequests:@[request] error:&error])
-                return ATLReply(requestID,NO,nil,@"VISION_FAILED",error.localizedDescription);
+                return ATLReply(requestID,NO,nil,@"VISION_FAILED",error.localizedDescription,energy);
             NSMutableArray *lines=[NSMutableArray array];
             for (VNRecognizedText *observation in request.results) {
                 if (lines.count>=ATL_OCR_LINE_LIMIT) break;
@@ -118,9 +123,9 @@ int main(int argc,char **argv) {
                 [lines addObject:@{@"text":text,@"x":@(x),@"y":@(y),
                     @"width":@(width),@"height":@(height),@"confidence":@(candidate.confidence)}];
             }
-            result=ATLReply(requestID,YES,lines,nil,nil);
+            result=ATLReply(requestID,YES,lines,nil,nil,energy);
         } @catch (NSException *exception) {
-            result=ATLReply(requestID,NO,nil,@"VISION_FAILED",exception.reason);
+            result=ATLReply(requestID,NO,nil,@"VISION_FAILED",exception.reason,energy);
         } @finally {
             if (image) CGImageRelease(image);
             if (source) CFRelease(source);

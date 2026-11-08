@@ -104,10 +104,16 @@ jobs:
           # loslib keeps system(cmd) only outside iOS; the exposed library whitelist excludes os.
           grep -q '__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__' tweak/lib/lua53/loslib.c
 
+      # 2026-11-08: 移除 `pip install lupa==2.8`。根因：lupa 2.8 在
+      # macos-15-intel runner (Python 3.12) 上唯一的 x86_64 wheel 平台标签为
+      # macosx_10_13_x86_64 (cp312-abi3)，pip 匹配失败即回退 sdist 现场编译
+      # LuaJIT + lupa C 扩展，卡死 1 小时+（日志 blob 无 flush）。
+      # 实际仅 3 个测试依赖 lupa (test_email_script/test_extensions_lua/
+      # test_phone_flow)，且均以 @unittest.skipUnless(LuaRuntime) 兜底，
+      # 未安装时自动 skip 而非失败。故 CI 不再安装 lupa，本地按需自装。
       - name: Behavioral regressions
         run: |
           set -eux
-          python3 -m pip install lupa==2.8
           python3 -m unittest discover -s tests -v
 
       # 构建纪律铁律第 2 条：CI 脚本天生可诊断。断言先于构建跑，

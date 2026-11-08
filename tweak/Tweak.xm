@@ -527,6 +527,32 @@ static void ATFreeBitmap(ATBitmap *b) {
     b->w = b->h = 0;
 }
 
+// A 方案：2×2 块平均降采样（宽高各减半，像素量 ÷4）。仅用于节能模式的 OCR 输入，
+// findImage 仍走全分辨率，规避模板匹配精度风险。奇数宽高的最后一行/列被丢弃（不越界）。
+static BOOL ATDownsampleBitmapHalf(const ATBitmap *src, ATBitmap *dst) {
+    if (!src || !src->rgba || src->w < 2 || src->h < 2) return NO;
+    int dw = src->w / 2, dh = src->h / 2;
+    dst->rgba = (uint8_t *)malloc((size_t)dw * dh * 4);
+    if (!dst->rgba) return NO;
+    dst->w = dw; dst->h = dh; dst->borrowed = NO;
+    for (int y = 0; y < dh; y++) {
+        const uint8_t *row0 = src->rgba + (size_t)(y * 2) * src->w * 4;
+        const uint8_t *row1 = row0 + (size_t)src->w * 4;
+        uint8_t *d = dst->rgba + (size_t)y * dw * 4;
+        for (int x = 0; x < dw; x++) {
+            const uint8_t *p00 = row0 + (size_t)(x * 2) * 4;
+            const uint8_t *p10 = p00 + 4;
+            const uint8_t *p01 = row1 + (size_t)(x * 2) * 4;
+            const uint8_t *p11 = p01 + 4;
+            d[x*4+0] = (uint8_t)((p00[0] + p10[0] + p01[0] + p11[0]) / 4);
+            d[x*4+1] = (uint8_t)((p00[1] + p10[1] + p01[1] + p11[1]) / 4);
+            d[x*4+2] = (uint8_t)((p00[2] + p10[2] + p01[2] + p11[2]) / 4);
+            d[x*4+3] = 255;
+        }
+    }
+    return YES;
+}
+
 static BOOL gEnergyEnabled=NO;
 static unsigned gEnergyDepth=0;
 static ATBitmap gEnergyFrame={0};
@@ -1064,14 +1090,20 @@ static int ATLOCRCancelled(void *context) {
 static BOOL ATRecognizeScreen(ATTextResult *out) {
     if (gEnergyEnabled && gEnergyDepth && gEnergyOCRValid) { *out=gEnergyOCR;gEnergyOCRHits++;return YES; }
     if (gOCRWorkerBroken) { ATLog(@"OCR disabled after unconfirmed child reap; respring required");return NO; }
-    ATBitmap bitmap={0};CGImageRef image=NULL;CGImageDestinationRef destination=NULL;
+    ATBitmap bitmap={0};ATBitmap small={0};
+    CGImageRef image=NULL;CGImageDestinationRef destination=NULL;
     int inputFD=-1;BOOL ok=NO;
     @try {
         @autoreleasepool {
             if (!ATCaptureForRead(&bitmap)) return NO;
-            image=ATCreateCGImageFromBitmap(&bitmap);
+            ATBitmap *feed=&bitmap;
+            // A 方案：节能模式下 OCR 输入降采样（宽高减半），坐标由 scale 同步换算。
+            if (gEnergyEnabled && gEnergyDepth) {
+                if (ATDownsampleBitmapHalf(&bitmap,&small)) feed=&small;
+            }
+            image=ATCreateCGImageFromBitmap(feed);
             if (!image) return NO;
-            double scale=ATCaptureScale(&bitmap);
+            double scale=ATCaptureScale(feed);
             NSMutableData *png=[NSMutableData data];
             destination=CGImageDestinationCreateWithData((__bridge CFMutableDataRef)png,CFSTR("public.png"),1,NULL);
             if (!destination) return NO;
@@ -1101,7 +1133,7 @@ static BOOL ATRecognizeScreen(ATTextResult *out) {
             NSMutableData *output=[NSMutableData dataWithLength:ATL_OCR_OUTPUT_LIMIT];
             if (gEnergyEnabled) gEnergyOCRRequests++;
             ATLChildResult child=ATLRunChild(exe.fileSystemRepresentation,requestID.UTF8String,inputFD,
-                (char *)output.mutableBytes,output.length,ATL_OCR_TIMEOUT,ATLOCRCancelled,NULL);
+                (char *)output.mutableBytes,output.length,ATL_OCR_TIMEOUT,ATLOCRCancelled,NULL,gEnergyEnabled);
             if (child.status!=ATL_CHILD_OK) {
                 if (child.status==ATL_CHILD_REAP_FAILED) gOCRWorkerBroken=YES;
                 ATLog(@"OCR request=%@ process failed status=%d errno=%d reaped=%d exit=%d signal=%d",requestID,child.status,child.systemError,child.reaped,child.exitCode,child.signal);
@@ -1109,7 +1141,7 @@ static BOOL ATRecognizeScreen(ATTextResult *out) {
             }
             output.length=child.length;
             NSString *error=nil;
-            ok=ATLDecodeOCRReply(output,requestID,bitmap.w,bitmap.h,scale,out,&error);
+            ok=ATLDecodeOCRReply(output,requestID,feed->w,feed->h,scale,out,&error,gEnergyEnabled?@"fast":@"accurate");
             if (!ok) ATLog(@"OCR request=%@ failed: %@",requestID,error);
             else if (gEnergyEnabled && gEnergyDepth) { gEnergyOCR=*out;gEnergyOCRValid=YES; }
         }
@@ -1117,6 +1149,7 @@ static BOOL ATRecognizeScreen(ATTextResult *out) {
         if (inputFD>=0) close(inputFD);
         if (destination) CFRelease(destination);
         if (image) CGImageRelease(image);
+        ATFreeBitmap(&small);
         ATFreeBitmap(&bitmap);
     }
     return ok;

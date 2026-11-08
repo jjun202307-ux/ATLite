@@ -12,7 +12,7 @@ static inline BOOL ATLOCRReplyError(NSString **error, NSString *message) {
     return NO;
 }
 static inline BOOL ATLDecodeOCRReply(NSData *data, NSString *requestID,
-        int w,int h,double scale,ATTextResult *out,NSString **error) {
+        int w,int h,double scale,ATTextResult *out,NSString **error,NSString *expectedMode) {
     if (!out || !data.length || data.length>ATL_OCR_OUTPUT_LIMIT || w<=0 || h<=0 || !isfinite(scale) || scale<=0)
         return ATLOCRReplyError(error,@"Invalid OCR input or output bound");
     id reply=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
@@ -23,7 +23,10 @@ static inline BOOL ATLDecodeOCRReply(NSData *data, NSString *requestID,
         id reason=reply[@"errorMessage"];
         return ATLOCRReplyError(error,[reason isKindOfClass:NSString.class] && [reason length]<=1024 ? reason : @"OCR worker failed");
     }
-    if (![reply[@"mode"] isEqual:@"accurate"] || ![reply[@"languages"] isEqual:(@[@"zh-Hans",@"en-US"])])
+    // 节能模式期望 fast/en-US，默认/legacy 期望 accurate/zh-Hans+en-US。
+    NSString *mode=expectedMode ?: @"accurate";
+    NSArray *expectLangs=[mode isEqual:@"fast"] ? @[@"en-US"] : @[@"zh-Hans",@"en-US"];
+    if (![reply[@"mode"] isEqual:mode] || ![reply[@"languages"] isEqual:expectLangs])
         return ATLOCRReplyError(error,@"OCR recognition capability mismatch");
     id lines=reply[@"lines"];
     if (![lines isKindOfClass:NSArray.class] || [lines count]>ATL_OCR_LINE_LIMIT)

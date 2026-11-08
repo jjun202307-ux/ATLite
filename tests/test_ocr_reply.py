@@ -11,21 +11,26 @@ int main(void) { @autoreleasepool {
  NSMutableDictionary *reply=[@{@"version":@1,@"requestId":@"test",@"ok":@YES,@"mode":@"accurate",@"languages":@[@"zh-Hans",@"en-US"],@"lines":@[line]} mutableCopy];
  ATTextResult result={0};NSString *error=nil;
  NSData *(^encode)(void)=^{return [NSJSONSerialization dataWithJSONObject:reply options:0 error:nil];};
- NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"valid reply");
+ NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate"),@"valid reply");
  NSCAssert(result.count==1 && fabs(result.lines[0].x-41.4)<.001 && !strcmp(result.lines[0].text,"用户名：测试用户"),@"point conversion and UTF8");
  reply[@"lines"]=@[@{@"text":@"fixture",@"x":@(-0.0004650982105789553),@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}];
- NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error) && result.lines[0].x==0,@"clip one-pixel Vision edge overshoot");
+ NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate") && result.lines[0].x==0,@"clip one-pixel Vision edge overshoot");
  reply[@"lines"]=@[@{@"text":@"fixture",@"x":@(-2.0/828.0),@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}];
- NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"reject over one pixel outside");
- NSCAssert(!ATLDecodeOCRReply(encode(),@"old",828,1792,2,&result,&error),@"reject other request");
+ NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate"),@"reject over one pixel outside");
+ NSCAssert(!ATLDecodeOCRReply(encode(),@"old",828,1792,2,&result,&error,@"accurate"),@"reject other request");
  reply[@"lines"]=@[@{@"text":@"bad",@"x":@"0.1",@"y":@0,@"width":@1,@"height":@1,@"confidence":@1}];
- NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"reject numeric strings");
+ NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate"),@"reject numeric strings");
  reply[@"lines"]=@[@{@"text":@"bad",@"x":@.9,@"y":@0,@"width":@.5,@"height":@1,@"confidence":@1}];
- NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"reject out of frame boxes");
- reply[@"lines"]=@{};NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error),@"reject malformed lines");
+ NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate"),@"reject out of frame boxes");
+ reply[@"lines"]=@{};NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate"),@"reject malformed lines");
  reply[@"ok"]=@NO;reply[@"errorMessage"]=@"model unavailable";
- NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error) && [error isEqual:@"model unavailable"],@"worker failure never becomes empty success");
- NSCAssert(!ATLDecodeOCRReply([NSData dataWithBytes:"bad" length:3],@"test",828,1792,2,&result,&error),@"invalid JSON");
+ NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate") && [error isEqual:@"model unavailable"],@"worker failure never becomes empty success");
+ NSCAssert(!ATLDecodeOCRReply([NSData dataWithBytes:"bad" length:3],@"test",828,1792,2,&result,&error,@"accurate"),@"invalid JSON");
+ reply=[[@{@"version":@1,@"requestId":@"test",@"ok":@YES,@"mode":@"fast",@"languages":@[@"en-US"],@"lines":@[@{@"text":@"Hello",@"x":@.1,@"y":@.2,@"width":@.4,@"height":@.1,@"confidence":@.9}]} mutableCopy] objectAtIndex:0];
+ NSCAssert(ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"fast") && result.count==1,@"energy fast mode accepted");
+ NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"accurate"),@"fast reply rejected by accurate expectation");
+ reply[@"mode"]=@"accurate";reply[@"languages"]=@[@"zh-Hans",@"en-US"];
+ NSCAssert(!ATLDecodeOCRReply(encode(),@"test",828,1792,2,&result,&error,@"fast"),@"accurate reply rejected by fast expectation");
  return 0;
 } }'''
   with tempfile.TemporaryDirectory() as d:
