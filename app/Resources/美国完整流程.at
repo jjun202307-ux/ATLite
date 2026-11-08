@@ -450,8 +450,10 @@ log('US_PREPARATION_READONLY_END')
 end
 parts['home']=function()
 local function homeVisible()
- local a=findText('App Store');local b=findText('Shadowrocket')
- return a and #a>0 and b and #b>0
+ -- 认图标判主屏（findImage 全分辨率、不受节能 OCR 改动影响）
+ -- 与 close_apps 同锚点：主屏左上角 Settings 图标，已验证可用。
+ local hit=findImage('PHONE_launch_settings.png',0.75,{x=0,y=240,width=125,height=130})
+ return hit and #hit>0
 end
 if not homeVisible() then
  keyDown(KEY_TYPE.HOME_BUTTON);msleep(80)

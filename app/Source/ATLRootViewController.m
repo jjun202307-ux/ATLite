@@ -83,6 +83,9 @@ static NSString *ATLFilesDirectory(void) {
 @interface ATLRootViewController ()
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *energyButton;
+@property (nonatomic, strong) UISegmentedControl *ocrLevelControl;
+@property (nonatomic, strong) UISlider *similaritySlider;
+@property (nonatomic, strong) UILabel *similarityLabel;
 @property (nonatomic, strong) ATLWebServer *server;
 @property (nonatomic, strong) NSMutableArray<NSString *> *scripts;
 @end
@@ -116,16 +119,36 @@ static NSString *ATLFilesDirectory(void) {
     self.statusLabel.font = [UIFont systemFontOfSize:12];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     self.statusLabel.textColor = [UIColor darkGrayColor];
-    UIView *header=[[UIView alloc] initWithFrame:CGRectMake(0,0,self.tableView.bounds.size.width,108)];
-    self.statusLabel.frame=CGRectMake(0,0,header.bounds.size.width,56);
+    UIView *header=[[UIView alloc] initWithFrame:CGRectMake(0,0,self.tableView.bounds.size.width,196)];
+    self.statusLabel.frame=CGRectMake(0,0,header.bounds.size.width,52);
     self.statusLabel.autoresizingMask=UIViewAutoresizingFlexibleWidth;
     [header addSubview:self.statusLabel];
     self.energyButton=[UIButton buttonWithType:UIButtonTypeSystem];
-    self.energyButton.frame=CGRectMake(12,56,header.bounds.size.width-24,44);
+    self.energyButton.frame=CGRectMake(12,52,header.bounds.size.width-24,38);
     self.energyButton.autoresizingMask=UIViewAutoresizingFlexibleWidth;
     self.energyButton.titleLabel.font=[UIFont systemFontOfSize:13];
     [self.energyButton addTarget:self action:@selector(toggleEnergyMode) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:self.energyButton];
+
+    // OCR 识别级别（独立于节能开关）
+    self.ocrLevelControl=[[UISegmentedControl alloc] initWithItems:@[@"Accurate",@"Fast"]];
+    self.ocrLevelControl.frame=CGRectMake(12,94,header.bounds.size.width-24,30);
+    self.ocrLevelControl.autoresizingMask=UIViewAutoresizingFlexibleWidth;
+    [self.ocrLevelControl addTarget:self action:@selector(ocrLevelChanged) forControlEvents:UIControlEventValueChanged];
+    [header addSubview:self.ocrLevelControl];
+
+    // 识图阈值（findImage 默认相似度）
+    self.similaritySlider=[[UISlider alloc] initWithFrame:CGRectMake(12,130,header.bounds.size.width-24,28)];
+    self.similaritySlider.minimumValue=0.5;self.similaritySlider.maximumValue=1.0;
+    self.similaritySlider.autoresizingMask=UIViewAutoresizingFlexibleWidth;
+    [self.similaritySlider addTarget:self action:@selector(similarityChanged) forControlEvents:UIControlEventValueChanged];
+    [self.similaritySlider addTarget:self action:@selector(similarityCommitted) forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside];
+    [header addSubview:self.similaritySlider];
+    self.similarityLabel=[[UILabel alloc] initWithFrame:CGRectMake(12,158,header.bounds.size.width-24,18)];
+    self.similarityLabel.font=[UIFont systemFontOfSize:11];
+    self.similarityLabel.textColor=[UIColor darkGrayColor];
+    self.similarityLabel.autoresizingMask=UIViewAutoresizingFlexibleWidth;
+    [header addSubview:self.similarityLabel];
     self.tableView.tableHeaderView=header;
 
     // E24：日志入口常驻导航栏，脚本"没反应"时一键查看 tweak 日志
@@ -268,10 +291,40 @@ static NSString *ATLFilesDirectory(void) {
     [self.energyButton setTitle:enabled ? @"☑ 节能模式（下次运行生效）" : @"☐ 节能模式（当前为老模式）" forState:UIControlStateNormal];
     self.energyButton.accessibilityLabel=@"节能模式";
     self.energyButton.accessibilityValue=enabled ? @"已勾选" : @"未勾选";
+
+    // OCR 级别与识图阈值独立读取（不依赖节能开关）
+    NSString *level=ATLEnergyOCRLevel(ATLBaseDir());
+    self.ocrLevelControl.selectedSegmentIndex=[level isEqualToString:@"fast"] ? 1 : 0;
+
+    double sim=ATLEnergyImageSimilarity(ATLBaseDir());
+    self.similaritySlider.value=sim;
+    self.similarityLabel.text=[NSString stringWithFormat:@"识图阈值 %.2f（findImage 默认相似度）",sim];
+}
+- (void)ocrLevelChanged {
+    NSError *error=nil;
+    NSString *level=self.ocrLevelControl.selectedSegmentIndex==1 ? @"fast" : @"accurate";
+    if (!ATLSaveEnergySettings(ATLBaseDir(),@{@"ocrLevel":level},&error)) {
+        UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"OCR 级别保存失败" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    }
+}
+- (void)similarityChanged {
+    double sim=self.similaritySlider.value;
+    self.similarityLabel.text=[NSString stringWithFormat:@"识图阈值 %.2f（findImage 默认相似度）",sim];
+}
+- (void)similarityCommitted {
+    NSError *error=nil;
+    double sim=self.similaritySlider.value;
+    if (!ATLSaveEnergySettings(ATLBaseDir(),@{@"imageSimilarity":@(sim)},&error)) {
+        UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"识图阈值保存失败" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    }
 }
 - (void)toggleEnergyMode {
     NSError *error=nil;
-    if (!ATLSaveEnergyEnabled(ATLBaseDir(),!ATLEnergyEnabled(ATLBaseDir()),&error)) {
+    if (!ATLSaveEnergySettings(ATLBaseDir(),@{@"enabled":@(!ATLEnergyEnabled(ATLBaseDir()))},&error)) {
         UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"节能设置保存失败" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];

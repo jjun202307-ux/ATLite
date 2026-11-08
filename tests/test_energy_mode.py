@@ -31,23 +31,32 @@ class EnergyModeTests(unittest.TestCase):
         self.assertIn('gEnergyEnabled=ATLEnergyEnabled(ATBaseDir());', source)
         self.assertIn('gEnergyTemplates=nil;', source)
 
-    def test_energy_ocr_fast_is_gated_by_energy_and_no_downsample(self):
+    def test_energy_ocr_level_independent_and_no_downsample(self):
         source = (ROOT / 'tweak/Tweak.xm').read_text(encoding='utf-8')
         # A 方案已移除：降采样会破坏主屏小图标文字识别（Shadowrocket→Shadowro¢ket），
         # OCR 输入保持全分辨率 bitmap，不再有降采样分支。
         self.assertNotIn('ATDownsampleBitmapHalf', source)
         self.assertIn('ATCreateCGImageFromBitmap(&bitmap)', source)
-        # B 方案：spawn 传 --energy 与校验传 fast 都由 gEnergyEnabled 决定
-        self.assertIn('gEnergyEnabled?@"fast":@"accurate"', source)
+        # OCR 级别独立于节能开关：读 gOCRLevel（默认 accurate），不再由 gEnergyEnabled 决定。
+        self.assertIn('static NSString *gOCRLevel=@"accurate"', source)
+        self.assertIn('gOCRLevel=ATLEnergyOCRLevel(ATBaseDir())', source)
+        self.assertIn('int ocrFast=[gOCRLevel isEqualToString:@"fast"]', source)
+        # findImage 默认阈值可调：读 gImageSimilarity（默认 0.8）。
+        self.assertIn('static double gImageSimilarity=0.8', source)
+        self.assertIn('lua_isnumber(L, 2) ? lua_tonumber(L, 2) : gImageSimilarity', source)
         worker = (ROOT / 'ocr/main.m').read_text(encoding='utf-8')
-        self.assertIn('--energy', worker)
+        self.assertIn('--level', worker)
         self.assertIn('VNRequestTextRecognitionLevelFast', worker)
         child = (ROOT / 'shared/ATLChildProcess.h').read_text(encoding='utf-8')
-        self.assertIn('--energy', child)
+        self.assertIn('--level', child)
+        self.assertIn('"fast"', child)
 
     def test_energy_default_is_off_when_preference_missing(self):
         settings = (ROOT / 'shared/ATLEnergySettings.h').read_text(encoding='utf-8')
         self.assertIn('return NO', settings)
+        # 可调参数默认值：识图阈值 0.8，OCR 级别 accurate
+        self.assertIn('return 0.8', settings)
+        self.assertIn('return @"accurate"', settings)
 
 
 if __name__ == '__main__':

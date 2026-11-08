@@ -528,6 +528,8 @@ static void ATFreeBitmap(ATBitmap *b) {
 }
 
 static BOOL gEnergyEnabled=NO;
+static NSString *gOCRLevel=@"accurate";   // 独立于节能开关的 OCR 级别（fast/accurate），脚本运行前从 plist 读一次
+static double gImageSimilarity=0.8;       // findImage 未显式传阈值时的默认相似度
 static unsigned gEnergyDepth=0;
 static ATBitmap gEnergyFrame={0};
 static ATTextResult gEnergyOCR={0};
@@ -1009,7 +1011,7 @@ static int l_findColor(lua_State *L) {
 // findImage("button.png"[, similarity[, {x,y,width,height}]]) → { {x, y, score}, ... }（点坐标）
 static int l_findImage(lua_State *L) {
     const char *name = luaL_checkstring(L, 1);
-    double sim = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : 0.9;
+    double sim = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : gImageSimilarity;
     if (!isfinite(sim) || sim < 0 || sim > 1) return luaL_error(L, "findImage: similarity must be finite in [0,1]");
     BOOL hasRegion = !lua_isnoneornil(L,3);
     double region[4] = {0};
@@ -1101,8 +1103,9 @@ static BOOL ATRecognizeScreen(ATTextResult *out) {
             NSString *exe=[ATJBRoot() stringByAppendingPathComponent:@"Applications/ATLite.app/ATLOCRWorker"];
             NSMutableData *output=[NSMutableData dataWithLength:ATL_OCR_OUTPUT_LIMIT];
             if (gEnergyEnabled) gEnergyOCRRequests++;
+            int ocrFast=[gOCRLevel isEqualToString:@"fast"];
             ATLChildResult child=ATLRunChild(exe.fileSystemRepresentation,requestID.UTF8String,inputFD,
-                (char *)output.mutableBytes,output.length,ATL_OCR_TIMEOUT,ATLOCRCancelled,NULL,gEnergyEnabled);
+                (char *)output.mutableBytes,output.length,ATL_OCR_TIMEOUT,ATLOCRCancelled,NULL,ocrFast);
             if (child.status!=ATL_CHILD_OK) {
                 if (child.status==ATL_CHILD_REAP_FAILED) gOCRWorkerBroken=YES;
                 ATLog(@"OCR request=%@ process failed status=%d errno=%d reaped=%d exit=%d signal=%d",requestID,child.status,child.systemError,child.reaped,child.exitCode,child.signal);
@@ -1110,7 +1113,7 @@ static BOOL ATRecognizeScreen(ATTextResult *out) {
             }
             output.length=child.length;
             NSString *error=nil;
-            ok=ATLDecodeOCRReply(output,requestID,bitmap.w,bitmap.h,scale,out,&error,gEnergyEnabled?@"fast":@"accurate");
+            ok=ATLDecodeOCRReply(output,requestID,bitmap.w,bitmap.h,scale,out,&error,gOCRLevel);
             if (!ok) ATLog(@"OCR request=%@ failed: %@",requestID,error);
             else if (gEnergyEnabled && gEnergyDepth) { gEnergyOCR=*out;gEnergyOCRValid=YES; }
         }
@@ -1720,8 +1723,10 @@ static void ATPlayLuaFile(NSString *scriptPath) {
     ATEnergyInvalidate();gEnergyDepth=0;gEnergyTemplates=nil;
     gEnergyTemplateBytes=0;gEnergyTemplateClock=0;
     gEnergyEnabled=ATLEnergyEnabled(ATBaseDir());
+    gOCRLevel=ATLEnergyOCRLevel(ATBaseDir());
+    gImageSimilarity=ATLEnergyImageSimilarity(ATBaseDir());
     gEnergyCaptures=gEnergyFrameHits=gEnergyOCRRequests=gEnergyOCRHits=gEnergyTemplateHits=gEnergyTemplateDecodes=0;
-    ATLog(@"energy mode=%@",gEnergyEnabled ? @"ON" : @"OFF (legacy)");
+    ATLog(@"energy mode=%@ ocrLevel=%@ imageSimilarity=%.2f",gEnergyEnabled ? @"ON" : @"OFF (legacy)",gOCRLevel,gImageSimilarity);
     ATMemoryBudget budget = {0, SIZE_MAX};
     lua_State *L = NULL;
     @try {
