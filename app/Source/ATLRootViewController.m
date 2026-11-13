@@ -248,11 +248,11 @@ static NSString *ATLFilesDirectory(void) {
         [[NSFileManager defaultManager] createDirectoryAtPath:[dir stringByAppendingPathComponent:sub]
                                   withIntermediateDirectories:YES attributes:nil error:nil];
     }
-    self.server = [[ATLWebServer alloc] initWithRootPath:dir port:8080];
+    self.server = [[ATLWebServer alloc] initWithRootPath:dir port:18080];
     BOOL ok = [self.server start];
     NSString *ip = [self deviceIPAddress];
     self.statusLabel.text = ok
-        ? [NSString stringWithFormat:@"电脑访问: http://%@:8080\n上传 .at 脚本与 .png 搜图模板（同一 Wi-Fi）", ip]
+        ? [NSString stringWithFormat:@"电脑访问: http://%@:18080\n上传 .at 脚本与 .png 搜图模板（同一 Wi-Fi）", ip]
         : @"导入服务器启动失败（端口被占用？）";
 }
 

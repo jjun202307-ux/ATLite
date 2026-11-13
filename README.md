@@ -15,8 +15,8 @@
 5. 手机回到 ATLite 前台，电脑按 jobId 取回结果。没有识别到用户名会报 error，不伪造成功。
 
 ```powershell
-curl.exe -X PUT "http://手机IP:8080/api/job" -H "Content-Type: application/json" --data-raw '{"email":"demo@example.com"}'
-curl.exe "http://手机IP:8080/api/result?jobId=返回的jobId"
+curl.exe -X PUT "http://手机IP:18080/api/job" -H "Content-Type: application/json" --data-raw '{"email":"demo@example.com"}'
+curl.exe "http://手机IP:18080/api/result?jobId=返回的jobId"
 ```
 
 只保留一个当前任务，先取结果再发下一封。局域网服务无鉴权；iOS 挂起 App 时不可保证访问。发送任务不自动运行脚本，仍由手机选择运行。输入事件已发送不等于目标输入框已接受，须真机确认焦点和键盘布局。
